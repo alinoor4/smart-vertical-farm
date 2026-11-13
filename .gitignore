@@ -1,0 +1,16 @@
+# Documents that carry students' names and roll numbers. Do not commit without the owner's say-so.
+Smart Vertical Farm Proposal.pdf
+docs/report/*.docx
+docs/report/*.pdf
+docs/slides/*.pptx
+
+# Build output and local tooling
+build/
+.deps/
+out/
+dist/
+.venv-docs/
+*.exe
+*.log
+imgui.ini
+__pycache__/
