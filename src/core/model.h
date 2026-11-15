@@ -8,6 +8,10 @@
 // a > b + EPS (a < b - EPS when lower is better), so rounding noise never changes a decision.
 constexpr double EPS = 1e-9;
 
+// The knapsack resources in the fixed order of plan section 5.1: 0 labour, 1 water, 2 nutrient, 3 energy, 4 area.
+// Every array of five (weights, capacities, units, switches) uses this order.
+constexpr int kResources = 5;
+
 enum class Light { Low = 0, Medium = 1, High = 2 };
 
 struct Crop {

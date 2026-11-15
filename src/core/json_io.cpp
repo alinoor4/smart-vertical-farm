@@ -80,6 +80,7 @@ std::vector<std::string> validateScenario(const Scenario& s) {
         positive("trayD", c.trayD);
         positive("height", c.height);
         positive("cycleWeeks", c.cycleWeeks);
+        expect(c.cycleWeeks <= 104, "cycleWeeks must be at most 104");   // the forecast and the lot arrays are sized by it
         positive("yieldKg", c.yieldKg);
         nonNegative("harvestWindowWeeks", c.harvestWindowWeeks);
         nonNegative("pricePerKg", c.pricePerKg);
