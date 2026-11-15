@@ -510,3 +510,31 @@ TEST(knapsack_refuses_nan_and_infinite_capacity) {
         CHECK(solveGreedy(off).count[0] == 3 && solveBranchAndBound(off).count[0] == 3 && solveDp(off, unitOne).count[0] == 3);
     }
 }
+
+// rankCopies is the order the greedy (and the refill step) takes copies in: value per used budget, then value, then crop id,
+// then k. countsByCrop puts a count per group at the group's crop id.
+TEST(knapsack_rank_copies_and_counts_by_crop) {
+    // Capacity 10. Group 0 (crop 5): values 10 and 4 of weight 2, 50 and 20 per budget share; group 1 (crop 2): 6 of weight 1, 60.
+    KnapsackProblem p = makeProblem({10}, {makeGroup(5, {10, 4}, {2}), makeGroup(2, {6}, {1})});
+    std::vector<RankedCopy> order = rankCopies(p);
+    CHECK(order.size() == 3);
+    CHECK(order[0].group == 1 && order[0].k == 1 && order[1].group == 0 && order[1].k == 1 && order[2].group == 0 && order[2].k == 2);
+    // Same density and value: the lower crop id first, whatever the group order.
+    p = makeProblem({10}, {makeGroup(7, {5}, {1}), makeGroup(3, {5}, {1})});
+    order = rankCopies(p);
+    CHECK(order.size() == 2 && order[0].group == 1 && order[1].group == 0);
+    // Same density, different value: the larger value first (3 for weight 1 against 6 for weight 2).
+    p = makeProblem({10}, {makeGroup(0, {3}, {1}), makeGroup(1, {6}, {2})});
+    order = rankCopies(p);
+    CHECK(order[0].group == 1 && order[1].group == 0);
+    // A copy that uses nothing of the budget comes first; an empty problem has no copies; a NaN budget is refused.
+    p = makeProblem({10}, {makeGroup(0, {9}, {3}), makeGroup(1, {1}, {0})});
+    CHECK(rankCopies(p)[0].group == 1);
+    CHECK(rankCopies(makeProblem({10}, {})).empty());
+    CHECK_THROWS(rankCopies(makeProblem({std::numeric_limits<double>::quiet_NaN()}, {makeGroup(0, {1}, {1})})));
+
+    p = makeProblem({10}, {makeGroup(5, {10, 4}, {2}), makeGroup(2, {6}, {1}), makeGroup(9, {1}, {1}), makeGroup(8, {1}, {1})});
+    CHECK(countsByCrop(p, {2, 1, 0, 1}, 8) == Counts({0, 0, 1, 0, 0, 2, 0, 0}));  // crops 8 and 9 are beyond the count of 8 crops
+    CHECK(countsByCrop(p, {2, 1, 1, 1}, 10)[9] == 1 && countsByCrop(p, {2, 1, 1, 1}, 10)[8] == 1 && countsByCrop(p, {2, 1, 1, 1}, 10).size() == 10);
+    CHECK(countsByCrop(makeProblem({10}, {}), {}, 3) == Counts({0, 0, 0}));
+}

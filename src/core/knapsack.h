@@ -51,6 +51,16 @@ double knapsackValue(const KnapsackProblem& problem, const std::vector<int>& cou
 // The tray values of every crop by crop id, as packing and refilling need them (an empty list for a crop without a group).
 std::vector<std::vector<double>> valuesByCrop(const KnapsackProblem& problem, std::size_t cropCount);
 
+// Trays per crop id for a count per group (0 for a crop without a group).
+std::vector<int> countsByCrop(const KnapsackProblem& problem, const std::vector<int>& count, std::size_t cropCount);
+
+// One copy of a group: the k-th tray (from 1) of group `group`.
+struct RankedCopy { int group = 0, k = 0; };
+
+// Every copy in the order the greedy takes them (plan 9.5): value per used budget descending, then value descending, then
+// crop id, then k. Both the greedy and the refill step scan this list. Time O(N log N + N m).
+std::vector<RankedCopy> rankCopies(const KnapsackProblem& problem);
+
 // Variant 1 (plan 9.5): copies by value per used budget, taken while they fit. No guarantee of optimality.
 // Time O(N log N + N m) for N copies and m resources.
 KnapsackResult solveGreedy(const KnapsackProblem& problem);

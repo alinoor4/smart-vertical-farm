@@ -34,25 +34,27 @@ function(farm_static target)
 endfunction()
 
 add_library(farm_core STATIC src/core/version.cpp src/core/json_io.cpp src/core/generator.cpp src/core/constraints.cpp
-  src/core/forecast.cpp src/core/scheduling.cpp src/core/knapsack.cpp src/core/packing.cpp)
+  src/core/forecast.cpp src/core/scheduling.cpp src/core/knapsack.cpp src/core/packing.cpp src/core/pipeline.cpp)
 target_include_directories(farm_core PUBLIC src/core)
 target_link_libraries(farm_core PRIVATE nlohmann_json::nlohmann_json)   # only json_io.cpp may use it
 farm_warnings(farm_core)
 
-add_executable(farm_cli src/cli/main.cpp)
+add_executable(farm_cli src/cli/main.cpp src/cli/summary.cpp)
 target_link_libraries(farm_cli PRIVATE farm_core)
 farm_warnings(farm_cli)
 farm_static(farm_cli)
 
 add_executable(farm_tests tests/test_main.cpp tests/test_io.cpp tests/test_constraints.cpp tests/test_forecast.cpp
-  tests/test_scheduling.cpp tests/test_knapsack.cpp tests/test_packing.cpp)
+  tests/test_scheduling.cpp tests/test_knapsack.cpp tests/test_packing.cpp tests/test_pipeline.cpp)
 target_link_libraries(farm_tests PRIVATE farm_core)
 farm_warnings(farm_tests)
 farm_static(farm_tests)
 
 enable_testing()
 add_test(NAME farm_tests COMMAND farm_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-# The two farm_cli tests (run, bench) are added in M7 and M9, when those commands exist.
+add_test(NAME farm_cli_run COMMAND farm_cli run --scenario data/flat_scenario.json WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+set_tests_properties(farm_cli_run PROPERTIES PASS_REGULAR_EXPRESSION "relaxed optimum 39486.5")   # plan Appendix A, G6
+# The farm_cli bench test is added in M9, when that command exists.
 
 if(FARM_BUILD_APP)
   FetchContent_Declare(imgui URL https://github.com/ocornut/imgui/archive/c1aaac65e896a45f81f47a4d68f9959e0f86c859.tar.gz)

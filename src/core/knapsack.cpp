@@ -248,28 +248,42 @@ KnapsackProblem buildKnapsackProblem(const Scenario& scenario, const std::vector
     return problem;
 }
 
-KnapsackResult solveGreedy(const KnapsackProblem& problem) {
-    const auto start = Clock::now();
-    refuseNaNCapacity(problem);
-    const std::vector<int> active = activeResources(problem), budgeted = budgetedResources(problem);
+std::vector<int> countsByCrop(const KnapsackProblem& problem, const std::vector<int>& count, std::size_t cropCount) {
+    std::vector<int> byCrop(cropCount, 0);
+    for (std::size_t g = 0; g < problem.groups.size(); ++g)
+        if (problem.groups[g].cropId >= 0 && static_cast<std::size_t>(problem.groups[g].cropId) < cropCount) byCrop[problem.groups[g].cropId] = count[g];
+    return byCrop;
+}
 
-    struct Copy { double density, value; int cropId, group, k; };
+std::vector<RankedCopy> rankCopies(const KnapsackProblem& problem) {
+    refuseNaNCapacity(problem);
+    const std::vector<int> budgeted = budgetedResources(problem);
+    struct Copy { double density, value; int cropId; RankedCopy copy; };
     std::vector<Copy> copies;
     for (size_t g = 0; g < problem.groups.size(); ++g) {
         const KnapsackGroup& group = problem.groups[g];
         for (size_t k = 0; k < group.values.size(); ++k)
-            copies.push_back({density(group.values[k], group.weight, problem.capacity, budgeted), group.values[k],
-                              group.cropId, int(g), int(k) + 1});
+            copies.push_back({density(group.values[k], group.weight, problem.capacity, budgeted), group.values[k], group.cropId, {int(g), int(k) + 1}});
     }
     std::sort(copies.begin(), copies.end(), [](const Copy& a, const Copy& b) {   // a total order, so the result is deterministic
         if (a.density != b.density) return a.density > b.density;
         if (a.value != b.value) return a.value > b.value;
-        return a.cropId != b.cropId ? a.cropId < b.cropId : a.k < b.k;
+        return a.cropId != b.cropId ? a.cropId < b.cropId : a.copy.k < b.copy.k;
     });
+    std::vector<RankedCopy> ranked;
+    ranked.reserve(copies.size());
+    for (const Copy& c : copies) ranked.push_back(c.copy);
+    return ranked;
+}
+
+KnapsackResult solveGreedy(const KnapsackProblem& problem) {
+    const auto start = Clock::now();
+    const std::vector<int> active = activeResources(problem);
+    const std::vector<RankedCopy> ranked = rankCopies(problem);
 
     Weights remaining = problem.capacity;
     std::vector<int> count(problem.groups.size(), 0);
-    for (const Copy& copy : copies) {
+    for (const RankedCopy& copy : ranked) {
         const Weights& w = problem.groups[copy.group].weight;
         if (copy.k != count[copy.group] + 1 || !fits(w, remaining, active)) continue;   // only a crop's next tray, and only if it fits
         for (int r : active) remaining[r] -= w[r];

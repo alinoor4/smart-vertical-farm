@@ -135,3 +135,132 @@ std::vector<std::string> validateScenario(const Scenario& s) {
     }
     return errors;
 }
+
+// ---- plan results -------------------------------------------------------------------------------------------------
+
+namespace {
+
+Json forecastToJson(const ForecastResult& f, const std::string& crop) {
+    Json errors = Json::array();
+    for (int m = 1; m <= 4; ++m) {
+        const ForecastErrors& e = f.holdout[m - 1];
+        errors.push_back({{"method", name(static_cast<ForecastMethod>(m))}, {"available", e.available}, {"mae", e.mae}, {"rmse", e.rmse}, {"smape", e.smape}});
+    }
+    return {{"crop", crop}, {"method", name(f.chosen)}, {"parameters", f.parameters}, {"holdoutLength", f.holdoutLength}, {"holdout", errors}, {"forecast", f.forecast}};
+}
+
+Json optionsToJson(const PlanOptions& o) {
+    return {{"forecast", name(o.forecast)}, {"knapsack", name(o.knapsack)}, {"activeResource", o.activeResource}, {"bnbNodeLimit", o.bnbNodeLimit},
+            {"bnbTimeLimitSeconds", o.bnbTimeLimitSeconds}, {"dpMaxStates", o.dpMaxStates}, {"packer", name(o.packer)},
+            {"ga", {{"population", o.ga.population}, {"generations", o.ga.generations}, {"stallGenerations", o.ga.stallGenerations},
+                    {"crossoverRate", o.ga.crossoverRate}, {"mutationRate", o.ga.mutationRate}, {"seed", o.ga.seed}}},
+            {"refill", o.refill}, {"scheduler", name(o.scheduler)}, {"lookaheadWeeks", o.lookaheadWeeks}};
+}
+
+Json metricsToJson(const PlanMetrics& m) {
+    return {{"relaxedOptimum", m.relaxedOptimum}, {"planValue", m.planValue}, {"planShare", m.planShare}, {"expectedWeeklyProfit", m.expectedWeeklyProfit},
+            {"budgetUse", m.budgetUse}, {"placedArea", m.placedArea}, {"totalShelfArea", m.totalShelfArea}, {"usedShelfArea", m.usedShelfArea},
+            {"spaceUtilisation", m.spaceUtilisation}, {"spaceUtilisationOfUsed", m.spaceUtilisationOfUsed}, {"hardTotal", m.hardTotal},
+            {"hardOnTime", m.hardOnTime}, {"softTotal", m.softTotal}, {"softServed", m.softServed}, {"idleSlotWeeks", m.idleSlotWeeks},
+            {"contractReliability", m.contractReliability}, {"spotService", m.spotService}, {"revenue", m.revenue}, {"penalties", m.penalties}, {"net", m.net}};
+}
+
+}  // namespace
+
+std::string planResultToJson(const PlanResult& r, bool includeTiming) {
+    Json j;
+    j["scenario"] = r.scenarioName;
+    j["options"] = optionsToJson(r.options);
+
+    j["forecast"] = Json::array();
+    for (size_t c = 0; c < r.forecast.size(); ++c) j["forecast"].push_back(forecastToJson(r.forecast[c], r.cropNames[c]));
+
+    int explicitEdges = 0, heightEdges = 0, noCommonEdges = 0;
+    for (size_t a = 0; a < r.constraints.conflict.size(); ++a)
+        for (size_t b = a + 1; b < r.constraints.conflict.size(); ++b) {
+            const ConflictReason reason = r.constraints.conflict[a][b];
+            explicitEdges += reason == ConflictReason::Explicit ? 1 : 0;
+            heightEdges += reason == ConflictReason::Height ? 1 : 0;
+            noCommonEdges += reason == ConflictReason::NoCommonShelf ? 1 : 0;
+        }
+    std::vector<int> compatibleShelves;
+    for (const std::vector<char>& row : r.constraints.compat) compatibleShelves.push_back(int(std::count(row.begin(), row.end(), char(1))));
+    j["constraints"] = {{"pairsTotal", r.constraints.pairsTotal}, {"pairsCompatible", r.constraints.pairsCompatible}, {"compatibleShelvesPerCrop", compatibleShelves},
+                        {"conflictEdges", {{"explicit", explicitEdges}, {"height", heightEdges}, {"noCommonShelf", noCommonEdges}}},
+                        {"colours", {{"welshPowell", r.colours.welshPowell}, {"dsatur", r.colours.dsatur}, {"exact", r.colours.exact},
+                                     {"exactProven", r.colours.exactProven}, {"exactNodes", r.colours.exactNodes}}}};
+
+    j["demand"] = Json::array();
+    for (size_t c = 0; c < r.demand.size(); ++c) {
+        const CropDemand& d = r.demand[c];
+        const int hard = int(std::count_if(d.lots.begin(), d.lots.end(), [](const Lot& l) { return l.hard; }));
+        j["demand"].push_back({{"crop", r.cropNames[c]}, {"lots", d.lots.size()}, {"hardLots", hard}, {"contractSlots", d.contractSlots},
+                               {"demand", d.demand}, {"penaltyPerWeek", d.penaltyPerWeek}});
+    }
+
+    j["knapsack"] = {{"algorithm", name(r.options.knapsack)}, {"copies", [&] { size_t n = 0; for (const KnapsackGroup& g : r.problem.groups) n += g.values.size(); return n; }()},
+                     {"value", r.knapsack.value}, {"upperBound", r.knapsack.upperBound}, {"nodes", r.knapsack.nodes}, {"states", r.knapsack.states},
+                     {"provenOptimal", r.knapsack.provenOptimal}, {"note", r.knapsack.note}, {"capacity", r.problem.capacity}, {"active", r.problem.active}};
+
+    j["selection"] = Json::array();
+    for (size_t c = 0; c < r.rows.size(); ++c) {
+        const CropPlan& row = r.rows[c];
+        j["selection"].push_back({{"crop", r.cropNames[c]}, {"selected", row.selected}, {"trays", row.trays}, {"area", row.area}, {"weeklyKg", row.weeklyKg},
+                                  {"demandKg", row.demandKg}, {"value", row.value}, {"use", row.use}});
+    }
+
+    Json placements = Json::array();
+    for (const Placement& p : r.layout.placements) placements.push_back(Json::array({p.trayId, p.cropId, p.shelfId, p.x, p.y, p.w, p.d}));
+    Json unplaced = Json::array();
+    for (const Tray& t : r.pack.unplaced) unplaced.push_back(Json::array({t.id, t.cropId}));
+    j["packing"] = {{"algorithm", r.pack.algorithm}, {"placed", r.pack.state.placements.size()}, {"unplaced", unplaced}, {"value", r.pack.placedValue},
+                    {"shelvesUsed", r.pack.shelvesUsed}, {"placedArea", r.pack.placedArea}, {"usedShelfArea", r.pack.usedShelfArea},
+                    {"totalShelfArea", r.pack.totalShelfArea}, {"generationsRun", r.pack.generationsRun}, {"convergence", r.pack.convergence},
+                    {"refilled", r.refilled}, {"finalCount", r.finalCount}, {"planValue", r.metrics.planValue},
+                    {"layoutColumns", Json::array({"tray", "crop", "shelf", "x", "y", "w", "d"})}, {"layout", placements}};
+
+    j["schedule"] = Json::array();
+    for (const CropSchedule& s : r.schedules) {
+        Json batches = Json::array();
+        for (const Batch& b : s.batches) batches.push_back(Json::array({b.slot, b.lotId, b.start, b.end}));
+        j["schedule"].push_back({{"crop", r.cropNames[s.cropId]}, {"algorithm", name(r.options.scheduler)}, {"slots", s.slots}, {"hardTotal", s.hardTotal},
+                                 {"hardOnTime", s.hardOnTime}, {"softTotal", s.softTotal}, {"softServed", s.softServed}, {"idleSlotWeeks", s.idleSlotWeeks},
+                                 {"revenue", s.revenue}, {"penalties", s.penalties}, {"note", s.note}, {"batchColumns", Json::array({"slot", "lot", "start", "end"})},
+                                 {"batches", batches}});
+    }
+    j["weeklyUse"] = r.weeklyUse;
+    j["metrics"] = metricsToJson(r.metrics);
+    j["warnings"] = r.warnings;
+
+    if (includeTiming) {
+        Json stages = Json::object();
+        for (const auto& s : r.stageSeconds) stages[s.first] = s.second;
+        j["timing"] = {{"stages", stages}, {"total", r.totalSeconds}, {"knapsack", r.knapsack.seconds}, {"packing", r.pack.seconds}};
+    }
+    return j.dump(2) + "\n";
+}
+
+namespace {
+
+void writeText(const std::string& text, const std::string& path) {
+    std::ofstream out(path, std::ios::binary);   // binary: the same bytes on every operating system
+    out << text;
+    out.flush();
+    if (!out) throw std::runtime_error("cannot write " + path);
+}
+
+}  // namespace
+
+void savePlanResult(const PlanResult& result, const std::string& path) { writeText(planResultToJson(result), path); }
+
+std::string compareTableToJson(const CompareTable& table) {
+    Json j = Json::array();
+    for (const CompareStage& stage : table.stages) {
+        Json rows = Json::array();
+        for (const CompareRow& row : stage.rows) rows.push_back({{"name", row.name}, {"values", row.values}, {"note", row.note}});
+        j.push_back({{"stage", stage.name}, {"columns", stage.columns}, {"rows", rows}});
+    }
+    return j.dump(2) + "\n";
+}
+
+void saveCompareTable(const CompareTable& table, const std::string& path) { writeText(compareTableToJson(table), path); }

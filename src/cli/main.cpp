@@ -1,12 +1,15 @@
 // farm_cli <command> [options]. Exit codes: 0 success, 1 failure while running, 2 bad arguments or invalid scenario.
 #include <charconv>
 #include <cstdio>
+#include <initializer_list>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "generator.h"
 #include "json_io.h"
+#include "pipeline.h"
+#include "summary.h"
 #include "version.h"
 
 namespace {
@@ -17,6 +20,9 @@ const char* const usage =
     "usage: farm_cli <command> [options]\n"
     "  generate --out FILE [--seed N] [--crops N] [--racks N] [--flat] [--jitter X] [--horizon N]\n"
     "  validate --scenario FILE\n"
+    "  run --scenario FILE [--forecast auto|naive|ma|ses|hw] [--knapsack greedy|dp|bnb] [--packer ffd|bfd|ga]\n"
+    "      [--scheduler edf|lookahead|exact] [--lookahead N] [--no-refill] [--ga-seed N] [--out FILE]\n"
+    "  compare --scenario FILE [--out FILE]\n"
     "exit codes: 0 success, 1 failure while running, 2 bad arguments or invalid scenario\n";
 
 // The value after args[i]; leaves i on it.
@@ -34,6 +40,18 @@ template <class T> T numberAfter(const std::vector<std::string>& args, size_t& i
     const auto result = std::from_chars(text.data(), end, value);
     if (result.ec != std::errc() || result.ptr != end) throw UsageError("bad value for " + option + ": " + text);
     return value;
+}
+
+// The value after args[i] must be one of the listed words; leaves i on it.
+template <class T> T choiceAfter(const std::vector<std::string>& args, size_t& i, std::initializer_list<std::pair<const char*, T>> choices) {
+    const std::string& option = args[i];
+    const std::string& text = textAfter(args, i);
+    std::string list;
+    for (const auto& choice : choices) {
+        if (text == choice.first) return choice.second;
+        list += (list.empty() ? "" : "|") + std::string(choice.first);
+    }
+    throw UsageError("bad value for " + option + ": " + text + " (use " + list + ")");
 }
 
 void printCounts(const Scenario& s) {
@@ -95,6 +113,77 @@ int validate(const std::vector<std::string>& args) {
     return 0;
 }
 
+// Loads and checks a scenario for run and compare. Returns false, after saying why, when it cannot be used (exit code 2).
+bool loadUsable(const std::string& path, Scenario& scenario) {
+    try {
+        scenario = loadScenario(path);
+    } catch (const std::runtime_error& e) {
+        std::printf("%s\n", e.what());
+        return false;
+    }
+    const std::vector<std::string> problems = validateScenario(scenario);
+    if (problems.empty()) return true;
+    std::printf("%s: %zu problem(s)\n", path.c_str(), problems.size());
+    for (const std::string& p : problems) std::printf("  %s\n", p.c_str());
+    return false;
+}
+
+int run(const std::vector<std::string>& args) {
+    PlanOptions options;
+    std::string path, out;
+    for (size_t i = 0; i < args.size(); ++i) {
+        const std::string& option = args[i];
+        if (option == "--scenario") path = textAfter(args, i);
+        else if (option == "--forecast")
+            options.forecast = choiceAfter<ForecastMethod>(args, i, {{"auto", ForecastMethod::Auto}, {"naive", ForecastMethod::SeasonalNaive}, {"ma", ForecastMethod::MovingAverage},
+                                                                     {"ses", ForecastMethod::Ses}, {"hw", ForecastMethod::HoltWinters}});
+        else if (option == "--knapsack")
+            options.knapsack = choiceAfter<KnapsackAlgo>(args, i, {{"greedy", KnapsackAlgo::Greedy}, {"dp", KnapsackAlgo::Dp}, {"bnb", KnapsackAlgo::BranchAndBound}});
+        else if (option == "--packer")
+            options.packer = choiceAfter<PackAlgo>(args, i, {{"ffd", PackAlgo::FirstFitDecreasing}, {"bfd", PackAlgo::BestFitDecreasing}, {"ga", PackAlgo::Genetic}});
+        else if (option == "--scheduler")
+            options.scheduler = choiceAfter<SchedAlgo>(args, i, {{"edf", SchedAlgo::Edf}, {"lookahead", SchedAlgo::EdfLookahead}, {"exact", SchedAlgo::Exact}});
+        else if (option == "--lookahead") options.lookaheadWeeks = numberAfter<int>(args, i);
+        else if (option == "--no-refill") options.refill = false;
+        else if (option == "--ga-seed") options.ga.seed = numberAfter<unsigned long long>(args, i);
+        else if (option == "--out") out = textAfter(args, i);
+        else throw UsageError("unknown option " + option);
+    }
+    if (path.empty()) throw UsageError("run needs --scenario FILE");
+    if (options.lookaheadWeeks < -1) throw UsageError("--lookahead must be -1 (each crop's cycle) or more");
+
+    Scenario scenario;
+    if (!loadUsable(path, scenario)) return 2;
+    const PlanResult result = runPipeline(scenario, options);
+    printRunSummary(stdout, scenario, result);
+    if (!out.empty()) {
+        savePlanResult(result, out);
+        std::printf("\nwrote %s\n", out.c_str());
+    }
+    return 0;
+}
+
+int compare(const std::vector<std::string>& args) {
+    std::string path, out;
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == "--scenario") path = textAfter(args, i);
+        else if (args[i] == "--out") out = textAfter(args, i);
+        else throw UsageError("unknown option " + args[i]);
+    }
+    if (path.empty()) throw UsageError("compare needs --scenario FILE");
+
+    Scenario scenario;
+    if (!loadUsable(path, scenario)) return 2;
+    const CompareTable table = compareAll(scenario, PlanOptions());
+    std::printf("Scenario: %s\n", scenario.name.c_str());
+    printCompareTable(stdout, table);
+    if (!out.empty()) {
+        saveCompareTable(table, out);
+        std::printf("\nwrote %s\n", out.c_str());
+    }
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -104,6 +193,8 @@ int main(int argc, char** argv) {
         const std::vector<std::string> rest(args.begin() + 1, args.end());
         if (args[0] == "generate") return generate(rest);
         if (args[0] == "validate") return validate(rest);
+        if (args[0] == "run") return run(rest);
+        if (args[0] == "compare") return compare(rest);
         throw UsageError("unknown command " + args[0]);
     } catch (const UsageError& e) {
         std::fprintf(stderr, "farm_cli: %s\nfarm_cli %s\n%s", e.what(), farmVersion(), usage);
