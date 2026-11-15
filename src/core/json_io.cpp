@@ -10,8 +10,10 @@
 
 // One macro line per struct: every member is read (a missing key keeps the default) and written.
 // Light is stored as the integer 0, 1 or 2, which is nlohmann's default for enums.
-// shortcut: nlohmann converts a number with a fraction into an int field by truncating (4.5 -> 4) and true/false into 1/0,
-// and a key that is misspelt is ignored; upgrade by checking each field's JSON type if a hand-edited file ever hits this.
+// shortcut: nlohmann is lenient about numbers: a fraction is truncated into an int field (4.5 -> 4), true/false load as 1/0,
+// a negative seed wraps to a huge one, an integer beyond int range wraps (4294967298 -> 2, which then validates), and a
+// misspelt key is ignored. Strings, null, arrays and number-for-string/bool are rejected. Upgrade by checking each
+// field's JSON type if a hand-edited file ever hits this.
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Crop, id, name, category, trayW, trayD, canRotate, height, cycleWeeks,
     harvestWindowWeeks, lightMin, lightMax, humidityMin, humidityMax, laborPerWeek, waterPerWeek, nutrientPerWeek,
     energyPerWeek, yieldKg, pricePerKg, trayCost, salvageFraction)
@@ -49,7 +51,7 @@ std::vector<std::string> validateScenario(const Scenario& s) {
     std::vector<std::string> errors;
     std::string who = "scenario";   // names the item being checked, so every message says where
     auto expect = [&](bool ok, const std::string& what) { if (!ok) errors.push_back(who + ": " + what); };
-    // isfinite first: a file may hold 1e999, which parses as infinity.
+    // isfinite rejects infinity and NaN, which a generator parameter such as --jitter inf can produce (a file cannot: nlohmann rejects 1e999).
     auto positive = [&](const std::string& field, double v) { expect(std::isfinite(v) && v > 0, field + " must be positive"); };
     auto nonNegative = [&](const std::string& field, double v) { expect(std::isfinite(v) && v >= 0, field + " must not be negative"); };
     auto lightOk = [](Light l) { return l >= Light::Low && l <= Light::High; };
