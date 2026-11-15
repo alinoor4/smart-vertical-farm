@@ -1,14 +1,15 @@
-// Component 5, first part (plan sections 11.1 to 11.3): lots and the slot arithmetic. The schedulers and their tests
-// (11.4 to 11.9) come with milestone M6. Expected numbers come from plan Appendix A (G5, G6), from hand calculation
-// where a comment says so, and from plan/reference_model.py.
+// Component 5 (plan section 11): lots, the slot arithmetic (11.1 to 11.3) and the schedulers (11.4 to 11.9). Expected
+// numbers come from plan Appendix A (G5, G6), from hand calculation where a comment says so, and from plan/reference_model.py.
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "check.h"
+#include "farm.h"
 #include "forecast.h"
 #include "generator.h"
 #include "rng.h"
@@ -311,4 +312,403 @@ TEST(crop_demand_flat_farm) {
     const CropDemand lettuce = buildCropDemand(s, 0, f.forecast);
     for (const Lot& lot : lettuce.lots)
         if (lot.hard) CHECK_NEAR(lot.penalty, 1080, 1e-9);
+}
+
+// ==== The schedulers (plan 11.4 to 11.9, milestone M6) =========================================================================
+
+namespace {
+
+// One lot for the scheduler tests: due week w with cycle p and window f gives latestStart w - p and release max(0, ls - f).
+Lot schedLot(int id, int due, bool hard, double value, double penalty, int p, int f, int cropId = 0) {
+    Lot lot;
+    lot.id = id;
+    lot.cropId = cropId;
+    lot.dueWeek = due;
+    lot.hard = hard;
+    lot.kg = 1.0;
+    lot.value = value;
+    lot.penalty = hard ? penalty : 0.0;
+    lot.latestStart = due - p;
+    lot.release = std::max(0, lot.latestStart - f);
+    return lot;
+}
+
+struct Spec { int slot, start, end; char kind; int due; };
+
+// The batches of a schedule as (slot, start, end, kind, due), in the order the scheduler made them.
+std::vector<Spec> specsOf(const CropSchedule& s) {
+    std::vector<Spec> out;
+    for (const Batch& b : s.batches) out.push_back({b.slot, b.start, b.end, s.lots[b.lotId].hard ? 'H' : 'S', s.lots[b.lotId].dueWeek});
+    return out;
+}
+
+bool sameSpecs(const std::vector<Spec>& a, const std::vector<Spec>& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i)
+        if (a[i].slot != b[i].slot || a[i].start != b[i].start || a[i].end != b[i].end || a[i].kind != b[i].kind || a[i].due != b[i].due) return false;
+    return true;
+}
+
+double netValue(const CropSchedule& s) { return s.revenue - s.penalties; }
+
+// True when the call throws std::invalid_argument and not some other exception that a bad argument happens to cause.
+template <class F>
+bool throwsInvalid(F call) {
+    try {
+        call();
+    } catch (const std::invalid_argument&) {
+        return true;
+    } catch (...) {
+    }
+    return false;
+}
+
+// Plan 11.9: no overlap on a slot, each lot at most once, every start inside its window and before the horizon; and the
+// statistics agree with the batches.
+void checkValidSchedule(const CropSchedule& s, int p, int horizon) {
+    std::vector<int> times(s.lots.size(), 0);
+    std::vector<std::vector<std::pair<int, int>>> perSlot(s.slots);
+    long long busy = 0;
+    for (const Batch& b : s.batches) {
+        CHECK(b.lotId >= 0 && b.lotId < int(s.lots.size()) && b.slot >= 0 && b.slot < s.slots);
+        if (b.lotId < 0 || b.lotId >= int(s.lots.size()) || b.slot < 0 || b.slot >= s.slots) return;
+        const Lot& lot = s.lots[b.lotId];
+        ++times[b.lotId];
+        CHECK(b.start >= lot.release && b.start <= lot.latestStart && b.start < horizon && b.start >= 0);
+        CHECK(b.end == b.start + p && b.cropId == s.cropId);
+        for (const auto& other : perSlot[b.slot]) CHECK(b.end <= other.first || other.second <= b.start);
+        perSlot[b.slot].push_back({b.start, b.end});
+        busy += std::min(b.end, horizon) - b.start;
+    }
+    int hardTotal = 0, hardOk = 0, softTotal = 0, softOk = 0;
+    double revenue = 0, penalties = 0;
+    for (size_t i = 0; i < s.lots.size(); ++i) {
+        CHECK(times[i] <= 1 && (times[i] == 1) == (s.scheduled[i] != 0));
+        if (s.lots[i].hard) { ++hardTotal; hardOk += s.scheduled[i] ? 1 : 0; if (!s.scheduled[i]) penalties += s.lots[i].penalty; }
+        else { ++softTotal; softOk += s.scheduled[i] ? 1 : 0; }
+        if (s.scheduled[i]) revenue += s.lots[i].value;
+    }
+    CHECK(s.scheduled.size() == s.lots.size());
+    CHECK(s.hardTotal == hardTotal && s.hardOnTime == hardOk && s.softTotal == softTotal && s.softServed == softOk);
+    CHECK_NEAR(s.revenue, revenue, 1e-9);
+    CHECK_NEAR(s.penalties, penalties, 1e-9);
+    CHECK(s.idleSlotWeeks == s.slots * horizon - busy);
+}
+
+}  // namespace
+
+// G5: one crop with p = 2, f = 0, two slots and six weeks. EDF fills both slots with soft lots and misses three hard lots;
+// lookahead keeps a slot free for each hard lot and misses none. The exact optimum is 60.
+TEST(schedule_g5_edf_lookahead_and_exact) {
+    const std::vector<Lot> lots = g5Lots();
+    const CropSchedule edf = scheduleCrop(lots, 2, 2, 6, SchedAlgo::Edf);
+    CHECK(edf.hardOnTime == 2 && edf.hardTotal == 5 && edf.softServed == 4 && edf.softTotal == 12 && edf.idleSlotWeeks == 0);
+    CHECK_NEAR(netValue(edf), 45, 1e-9);
+    CHECK(sameSpecs(specsOf(edf), {{0, 0, 2, 'S', 2}, {1, 0, 2, 'S', 2}, {0, 2, 4, 'H', 4}, {1, 2, 4, 'S', 4}, {0, 4, 6, 'H', 6}, {1, 4, 6, 'S', 6}}));
+    checkValidSchedule(edf, 2, 6);
+
+    const CropSchedule look = scheduleCrop(lots, 2, 2, 6, SchedAlgo::EdfLookahead);
+    CHECK(look.hardOnTime == 5 && look.hardTotal == 5 && look.softServed == 1 && look.softTotal == 12 && look.idleSlotWeeks == 1);
+    CHECK_NEAR(netValue(look), 60, 1e-9);
+    CHECK(sameSpecs(specsOf(look), {{0, 0, 2, 'S', 2}, {1, 1, 3, 'H', 3}, {0, 2, 4, 'H', 4}, {1, 3, 5, 'H', 5}, {0, 4, 6, 'H', 6}, {1, 5, 7, 'H', 7}}));
+    CHECK(look.penalties == 0 && look.revenue == 60 && edf.revenue == 60 && edf.penalties == 15);
+    CHECK(look.note.empty() && edf.note.empty() && look.cropId == 3 && look.slots == 2);
+    checkValidSchedule(look, 2, 6);
+
+    const CropSchedule exact = scheduleCrop(lots, 2, 2, 6, SchedAlgo::Exact);
+    CHECK_NEAR(netValue(exact), 60, 1e-9);
+    CHECK(exact.note.empty() && exact.hardOnTime == 5);
+    checkValidSchedule(exact, 2, 6);
+    for (size_t i = 1; i < exact.batches.size(); ++i) {   // the exact schedule lists its batches by week, then slot
+        const Batch& a = exact.batches[i - 1];
+        const Batch& b = exact.batches[i];
+        CHECK(a.start < b.start || (a.start == b.start && a.slot < b.slot));
+    }
+    CHECK(exact.batches.size() >= 5);
+
+    // Lookahead with L = 0 never schedules fewer hard lots than plain EDF here; L = -1 is the cycle.
+    CHECK(scheduleCrop(lots, 2, 2, 6, SchedAlgo::EdfLookahead, 0).hardOnTime >= edf.hardOnTime);
+    CHECK(sameSpecs(specsOf(scheduleCrop(lots, 2, 2, 6, SchedAlgo::EdfLookahead, 2)), specsOf(look)));
+}
+
+// The order EDF takes lots in: earliest due week first, then a hard lot before a soft one, then the higher value, then the
+// lower id. One slot, p = 1, so only one lot can go per week.
+TEST(schedule_edf_order) {
+    // All due in week 1 (latest start 0), one week: the hard lot goes although it is worth the least.
+    std::vector<Lot> lots = {schedLot(0, 1, false, 5, 0, 1, 0), schedLot(1, 1, false, 9, 0, 1, 0), schedLot(2, 1, true, 1, 3, 1, 0)};
+    CropSchedule s = scheduleCrop(lots, 1, 1, 1, SchedAlgo::Edf);
+    CHECK(s.batches.size() == 1 && s.batches[0].lotId == 2);
+    // Without the hard lot, the higher value.
+    lots.pop_back();
+    s = scheduleCrop(lots, 1, 1, 1, SchedAlgo::Edf);
+    CHECK(s.batches.size() == 1 && s.batches[0].lotId == 1);
+    // Equal values: the lower id, wherever it stands in the list.
+    lots = {schedLot(7, 1, false, 9, 0, 1, 0), schedLot(3, 1, false, 9, 0, 1, 0)};
+    s = scheduleCrop(lots, 1, 1, 1, SchedAlgo::Edf);
+    CHECK(s.batches.size() == 1 && s.batches[0].lotId == 3);
+    // An earlier due week wins over a better lot: week 0 takes the lot due in week 1, week 1 the one due in week 2.
+    lots = {schedLot(0, 2, true, 100, 50, 1, 1), schedLot(1, 1, false, 1, 0, 1, 1)};
+    s = scheduleCrop(lots, 1, 1, 2, SchedAlgo::Edf);
+    CHECK(s.batches.size() == 2 && s.batches[0].lotId == 1 && s.batches[0].start == 0 && s.batches[1].lotId == 0 && s.batches[1].start == 1);
+    // A lot that is not released yet is skipped, and one past its latest start is gone: nothing at week 0 for a lot that
+    // may start at week 1 only, and the slot stays idle that week.
+    lots = {schedLot(0, 2, false, 5, 0, 1, 0)};
+    s = scheduleCrop(lots, 1, 1, 3, SchedAlgo::Edf);
+    CHECK(s.batches.size() == 1 && s.batches[0].start == 1 && s.idleSlotWeeks == 2);
+    lots = {schedLot(0, 1, false, 5, 0, 1, 0), schedLot(1, 1, false, 4, 0, 1, 0)};   // both only at week 0; one slot
+    s = scheduleCrop(lots, 1, 1, 3, SchedAlgo::Edf);
+    CHECK(s.batches.size() == 1 && s.batches[0].lotId == 0 && s.softServed == 1 && s.softTotal == 2);
+    // Slots are taken in order within a week, and a slot busy for p weeks is skipped.
+    lots = {schedLot(0, 2, false, 5, 0, 2, 2), schedLot(1, 3, false, 5, 0, 2, 2), schedLot(2, 4, false, 5, 0, 2, 2)};
+    s = scheduleCrop(lots, 2, 2, 4, SchedAlgo::Edf);
+    CHECK(s.batches.size() == 3 && s.batches[0].slot == 0 && s.batches[1].slot == 1 && s.batches[2].slot == 0 && s.batches[2].start == 2);
+    checkValidSchedule(s, 2, 4);
+}
+
+// Lookahead: a released hard lot is taken before an earlier-due soft lot; a soft lot is held back only when it would cost a
+// hard lot that is due soon; the window L says how far ahead it looks.
+TEST(schedule_lookahead_rules) {
+    // Week 0: a soft lot due at week 1 (ls 0) and a hard lot due at week 2 (ls 1, release 0 because f = 1) are both released.
+    // EDF takes the soft lot first (earlier due); lookahead takes the hard lot.
+    std::vector<Lot> lots = {schedLot(0, 1, false, 5, 0, 1, 1), schedLot(1, 2, true, 1, 9, 1, 1)};
+    CHECK(scheduleCrop(lots, 1, 1, 1, SchedAlgo::Edf).batches[0].lotId == 0);
+    CHECK(scheduleCrop(lots, 1, 1, 1, SchedAlgo::EdfLookahead).batches[0].lotId == 1);
+
+    // One slot, p = 2. At week 0 a soft lot (ls 0) is released; a hard lot has ls = 1 and release = 1. Taking the soft lot
+    // blocks the slot until week 2, past the hard lot's latest start: it is refused when the window reaches week 1 (L >= 1)
+    // and taken when it does not (L = 0).
+    lots = {schedLot(0, 2, false, 5, 0, 2, 0), schedLot(1, 3, true, 1, 9, 2, 0)};
+    CHECK(scheduleCrop(lots, 1, 2, 4, SchedAlgo::EdfLookahead, 0).batches[0].lotId == 0);
+    CHECK(scheduleCrop(lots, 1, 2, 4, SchedAlgo::EdfLookahead, 1).batches[0].lotId == 1);
+    CHECK(scheduleCrop(lots, 1, 2, 4, SchedAlgo::EdfLookahead, -1).batches[0].lotId == 1);   // -1 is the cycle, 2
+    CHECK(scheduleCrop(lots, 1, 2, 4, SchedAlgo::EdfLookahead, 1).hardOnTime == 1);
+    CHECK(scheduleCrop(lots, 1, 2, 4, SchedAlgo::EdfLookahead, 0).hardOnTime == 0);
+    // The window runs from t to t + L, both ends included. One slot, p = 3: a soft lot due in week 3 (start 0) and a hard lot due
+    // in week 5 (start 2 only). Starting the soft lot blocks the slot until week 3, which loses the hard lot. At week 0 the hard
+    // lot is 2 weeks ahead: outside a window of 1 (the soft lot is taken, the hard lot lost), inside a window of 2 (refused).
+    lots = {schedLot(0, 3, false, 5, 0, 3, 0), schedLot(1, 5, true, 1, 9, 3, 0)};
+    CropSchedule edge = scheduleCrop(lots, 1, 3, 6, SchedAlgo::EdfLookahead, 1);
+    CHECK(edge.softServed == 1 && edge.hardOnTime == 0);
+    edge = scheduleCrop(lots, 1, 3, 6, SchedAlgo::EdfLookahead, 2);
+    CHECK(edge.softServed == 0 && edge.hardOnTime == 1 && edge.batches.size() == 1 && edge.batches[0].start == 2);
+    // A hard lot whose start the soft lot does not touch never holds it back: the slot is free again in time.
+    lots = {schedLot(0, 2, false, 5, 0, 2, 0), schedLot(1, 5, true, 1, 9, 2, 0)};   // soft starts at 0 and ends at 2; hard starts at 3
+    CHECK(scheduleCrop(lots, 1, 2, 6, SchedAlgo::EdfLookahead, 3).softServed == 1);
+    CHECK(scheduleCrop(lots, 1, 2, 6, SchedAlgo::EdfLookahead, 3).hardOnTime == 1);
+    // A second slot makes room: both lots are served.
+    lots = {schedLot(0, 2, false, 5, 0, 2, 0), schedLot(1, 3, true, 1, 9, 2, 0)};
+    const CropSchedule two = scheduleCrop(lots, 2, 2, 4, SchedAlgo::EdfLookahead, 1);
+    CHECK(two.hardOnTime == 1 && two.softServed == 1);
+    checkValidSchedule(two, 2, 4);
+}
+
+// Details of the admission test that a few lots can show: the default window is exactly the cycle, hard lots with the same
+// latest start are tried in id order, and hard lots that are lost anyway do not hold back a soft lot.
+TEST(schedule_admission_details) {
+    // p = 2, one slot, four weeks. The soft lot (start 0 or 1) is taken at week 0 when the window is 2 weeks (it leaves the
+    // slot free at week 2, in time for the hard lot due in week 4, which has latest start 2); a window of 3 also sees the
+    // hard lot due in week 5 (latest start 3), which the soft lot would cost, so it is refused.
+    const std::vector<Lot> plus = {schedLot(0, 5, true, 10, 7, 2, 1), schedLot(1, 4, true, 5, 5, 2, 1), schedLot(2, 3, false, 10, 0, 2, 1)};
+    CHECK(sameSpecs(specsOf(scheduleCrop(plus, 1, 2, 4, SchedAlgo::EdfLookahead)), {{0, 0, 2, 'S', 3}, {0, 2, 4, 'H', 4}}));
+    CHECK(sameSpecs(specsOf(scheduleCrop(plus, 1, 2, 4, SchedAlgo::EdfLookahead, 2)), {{0, 0, 2, 'S', 3}, {0, 2, 4, 'H', 4}}));
+    CHECK(sameSpecs(specsOf(scheduleCrop(plus, 1, 2, 4, SchedAlgo::EdfLookahead, 3)), {{0, 1, 3, 'H', 4}, {0, 3, 5, 'H', 5}}));
+    // The other way: a window of 1 week misses the hard lot with latest start 2 that a window of 2 weeks sees.
+    const std::vector<Lot> minus = {schedLot(0, 4, true, 5, 8, 2, 0), schedLot(1, 3, true, 5, 4, 2, 0), schedLot(2, 2, false, 5, 0, 2, 0)};
+    CHECK(sameSpecs(specsOf(scheduleCrop(minus, 1, 2, 4, SchedAlgo::EdfLookahead)), {{0, 0, 2, 'S', 2}, {0, 2, 4, 'H', 4}}));
+    CHECK(sameSpecs(specsOf(scheduleCrop(minus, 1, 2, 4, SchedAlgo::EdfLookahead, 1)), {{0, 1, 3, 'H', 3}}));
+
+    // Two hard lots with the same latest start (5) and different release weeks (3 and 1): in id order the first one blocks
+    // the second, with or without the soft lot, so the soft lot costs nothing and is taken; in the opposite order it would
+    // look as if it cost a lot. p = 3, one slot, a window of 5 weeks.
+    const std::vector<Lot> ties = {schedLot(0, 8, true, 10, 5, 3, 2), schedLot(1, 8, true, 10, 5, 3, 4), schedLot(2, 3, false, 10, 0, 3, 0)};
+    const CropSchedule tied = scheduleCrop(ties, 1, 3, 7, SchedAlgo::EdfLookahead, 5);
+    CHECK(sameSpecs(specsOf(tied), {{0, 0, 3, 'S', 3}, {0, 3, 6, 'H', 8}}));
+    CHECK(tied.hardOnTime == 1 && tied.softServed == 1);
+    // The same lots with the ids swapped (so that the lot with the early release has the higher id) take the other branch.
+    const std::vector<Lot> swapped = {schedLot(1, 8, true, 10, 5, 3, 2), schedLot(0, 8, true, 10, 5, 3, 4), schedLot(2, 3, false, 10, 0, 3, 0)};
+    const CropSchedule other = scheduleCrop(swapped, 1, 3, 7, SchedAlgo::EdfLookahead, 5);
+    CHECK(other.hardOnTime == 2 && other.softServed == 0);
+
+    // Two hard lots that can only be started at week 5, so one of them is lost whatever happens before: the soft lot at week
+    // 0 changes nothing (1 lost either way) and is admitted. Admitting only when nothing is lost would refuse it.
+    const std::vector<Lot> doomed = {schedLot(0, 3, false, 10, 0, 3, 0), schedLot(1, 8, true, 10, 5, 3, 0), schedLot(2, 8, true, 10, 5, 3, 0)};
+    const CropSchedule lost = scheduleCrop(doomed, 1, 3, 7, SchedAlgo::EdfLookahead, 5);
+    CHECK(sameSpecs(specsOf(lost), {{0, 0, 3, 'S', 3}, {0, 5, 8, 'H', 8}}));
+    CHECK(lost.hardOnTime == 1 && lost.hardTotal == 2 && lost.softServed == 1);
+}
+
+TEST(schedule_edge_cases_and_arguments) {
+    const std::vector<Lot> lots = g5Lots();
+    // No lots, no slots, no weeks.
+    for (SchedAlgo algo : {SchedAlgo::Edf, SchedAlgo::EdfLookahead, SchedAlgo::Exact}) {
+        const CropSchedule none = scheduleCrop({}, 3, 2, 6, algo);
+        CHECK(none.batches.empty() && none.hardTotal == 0 && none.softTotal == 0 && none.idleSlotWeeks == 18 && none.revenue == 0 && none.cropId == 0);
+        // A crop with lots but no slots: every hard lot is missed, with its penalty (plan 11.7).
+        const CropSchedule noSlots = scheduleCrop(lots, 0, 2, 6, algo);
+        CHECK(noSlots.batches.empty() && noSlots.hardTotal == 5 && noSlots.hardOnTime == 0 && noSlots.softServed == 0 && noSlots.idleSlotWeeks == 0);
+        CHECK_NEAR(noSlots.penalties, 25, 1e-9);
+        CHECK(noSlots.cropId == 3 && noSlots.lots.size() == 17 && noSlots.scheduled.size() == 17);
+        const CropSchedule noWeeks = scheduleCrop(lots, 2, 2, 0, algo);
+        CHECK(noWeeks.batches.empty() && noWeeks.idleSlotWeeks == 0);
+    }
+    // Arguments.
+    for (SchedAlgo algo : {SchedAlgo::Edf, SchedAlgo::EdfLookahead, SchedAlgo::Exact}) {
+        CHECK(throwsInvalid([&] { scheduleCrop(lots, -1, 2, 6, algo); }));
+        CHECK(throwsInvalid([&] { scheduleCrop(lots, 2, 2, -1, algo); }));
+        CHECK(throwsInvalid([&] { scheduleCrop(lots, 2, 0, 6, algo); }));
+        CHECK(throwsInvalid([&] { scheduleCrop(lots, 2, -3, 6, algo); }));
+        CHECK(throwsInvalid([&] { scheduleCrop(lots, 2, 2, 6, algo, -2); }));
+        CHECK(!throwsInvalid([&] { scheduleCrop(lots, 2, 2, 6, algo, -1); }));   // -1 and 0 are fine
+        CHECK(!throwsInvalid([&] { scheduleCrop(lots, 2, 1, 6, algo, 0); }));
+    }
+    // A batch that runs past the horizon counts only the weeks inside it: one slot, p = 3, a lot started at week 4 of 5.
+    const CropSchedule late = scheduleCrop({schedLot(0, 7, false, 5, 0, 3, 0)}, 1, 3, 5, SchedAlgo::Edf);
+    CHECK(late.batches.size() == 1 && late.batches[0].start == 4 && late.batches[0].end == 7 && late.idleSlotWeeks == 5 - 1);
+    // No batch may start at or after the horizon: the lot above with a horizon of 4 cannot be started.
+    CHECK(scheduleCrop({schedLot(0, 7, false, 5, 0, 3, 0)}, 1, 3, 4, SchedAlgo::Exact).batches.empty());
+    // The exact schedule lists its batches by start week even when the search finds them in the other order: the lot with the
+    // earlier latest start (3) is placed first, at week 3, and the lot due later but startable at week 0 goes on the second slot.
+    const CropSchedule listed = scheduleCrop({schedLot(0, 5, true, 10, 5, 2, 0), schedLot(1, 6, true, 10, 5, 2, 6)}, 2, 2, 6, SchedAlgo::Exact);
+    CHECK(listed.batches.size() == 2 && listed.batches[0].lotId == 1 && listed.batches[0].start == 0 && listed.batches[0].slot == 1);
+    CHECK(listed.batches[1].lotId == 0 && listed.batches[1].start == 3 && listed.batches[1].slot == 0);
+    checkValidSchedule(listed, 2, 6);
+    // The exact search shows the lookahead schedule when it cannot run, and says why.
+    std::vector<Lot> many;
+    for (int i = 0; i < kExactMaxLots + 1; ++i) many.push_back(schedLot(i, 2 + i % 4, i % 3 == 0, 10, 5, 2, 0));
+    const CropSchedule big = scheduleCrop(many, 3, 2, 6, SchedAlgo::Exact);
+    CHECK(big.note.find("too many lots") != std::string::npos);
+    CHECK(sameSpecs(specsOf(big), specsOf(scheduleCrop(many, 3, 2, 6, SchedAlgo::EdfLookahead))));
+    many.pop_back();   // exactly the limit is still searched (and may stop at the node limit instead, which is another note)
+    CHECK(scheduleCrop(many, 3, 2, 6, SchedAlgo::Exact).note.find("too many") == std::string::npos);
+    const CropSchedule limited = scheduleCrop(lots, 2, 2, 6, SchedAlgo::Exact, -1, 5);
+    CHECK(limited.note.find("stopped at 5 nodes") != std::string::npos);
+    CHECK(sameSpecs(specsOf(limited), specsOf(scheduleCrop(lots, 2, 2, 6, SchedAlgo::EdfLookahead))));
+    CHECK(scheduleCrop(lots, 2, 2, 6, SchedAlgo::Exact, -1, 0).note.find("stopped") != std::string::npos);   // a limit of 0 stops at once
+    CHECK(scheduleCrop(lots, 2, 2, 6, SchedAlgo::Exact, -1, 1000000).note.empty());
+}
+
+namespace {
+
+// The best value over every way to give each lot no batch or a batch on any slot at any week of its window, found by trying
+// them all: no assumption that a batch starts as early as it can.
+void bruteForce(const std::vector<Lot>& lots, size_t i, int p, int horizon, std::vector<std::vector<std::pair<int, int>>>& slots,
+                double current, double& best) {
+    if (i == lots.size()) { best = std::max(best, current); return; }
+    const Lot& lot = lots[i];
+    bruteForce(lots, i + 1, p, horizon, slots, current - (lot.hard ? lot.penalty : 0.0), best);   // skipped
+    for (auto& slot : slots)
+        for (int start = lot.release; start <= lot.latestStart && start < horizon; ++start) {
+            bool free = true;
+            for (const auto& taken : slot) free = free && (start + p <= taken.first || taken.second <= start);
+            if (!free) continue;
+            slot.push_back({start, start + p});
+            bruteForce(lots, i + 1, p, horizon, slots, current + lot.value, best);
+            slot.pop_back();
+        }
+}
+
+struct SmallInstance {
+    std::vector<Lot> lots;
+    int slots = 1, p = 1, horizon = 5;
+};
+
+// Plan 11.9: p in 1..3, f in 0..2, T in 5..7, 1 or 2 slots, 3 to 6 lots.
+SmallInstance randomSmall(Rng& rng) {
+    SmallInstance in;
+    in.p = 1 + rng.below(3);
+    const int f = rng.below(3);
+    in.horizon = 5 + rng.below(3);
+    in.slots = 1 + rng.below(2);
+    const int count = 3 + rng.below(4);
+    for (int i = 0; i < count; ++i) {
+        const int due = in.p + rng.below(in.horizon);
+        const bool hard = rng.below(2) == 0;
+        in.lots.push_back(schedLot(i, due, hard, 5 + rng.below(20), 1 + rng.below(15), in.p, f));
+    }
+    return in;
+}
+
+}  // namespace
+
+// Plan 11.9, the property: on 300 random small instances every schedule is valid and the exact value is at least that of EDF
+// and of lookahead. Not asserted: that lookahead beats EDF, which it does not always (17 of 400 cases in the plan's check).
+// And an independent brute force over every slot and week agrees with the exact search on every instance.
+TEST(schedule_random_small_instances) {
+    Rng rng(11);
+    int exactBeatsLookahead = 0;
+    for (int round = 0; round < 300; ++round) {
+        const SmallInstance in = randomSmall(rng);
+        const CropSchedule edf = scheduleCrop(in.lots, in.slots, in.p, in.horizon, SchedAlgo::Edf);
+        const CropSchedule look = scheduleCrop(in.lots, in.slots, in.p, in.horizon, SchedAlgo::EdfLookahead);
+        const CropSchedule exact = scheduleCrop(in.lots, in.slots, in.p, in.horizon, SchedAlgo::Exact);
+        for (const CropSchedule* s : {&edf, &look, &exact}) checkValidSchedule(*s, in.p, in.horizon);
+        CHECK(exact.note.empty());
+        CHECK(netValue(exact) >= netValue(edf) - 1e-9 && netValue(exact) >= netValue(look) - 1e-9);
+        std::vector<std::vector<std::pair<int, int>>> slots(in.slots);
+        double best = -1e18;
+        bruteForce(in.lots, 0, in.p, in.horizon, slots, 0.0, best);
+        CHECK_NEAR(netValue(exact), best, 1e-9);
+        if (netValue(exact) > netValue(look) + 1e-9) ++exactBeatsLookahead;
+    }
+    CHECK(exactBeatsLookahead > 10);   // the heuristics are not already optimal on these instances
+}
+
+// G6: on the slot counts of the FFD final plan, EDF and lookahead per crop and in total, and the effect of the window.
+TEST(schedule_g6_flat_farm) {
+    const Farm farm = makeFarm(flatScenario());
+    struct Row { int crop, slots; int edfHard, hardTotal, edfSoft, softTotal, edfIdle; int laHard, laSoft, laIdle; };
+    const Row rows[] = {
+        {0, 10, 12, 24, 18, 60, 3, 24, 0, 20},    // Lettuce
+        {1, 24, 12, 12, 60, 60, 36, 12, 60, 36},  // Baby Spinach
+        {2, 10, 0, 0, 20, 22, 14, 0, 20, 14},     // Kale
+        {4, 1, 0, 0, 4, 32, 0, 0, 4, 0},          // Arugula
+        {5, 16, 12, 12, 36, 36, 24, 12, 36, 24},  // Basil
+        {8, 14, 24, 24, 60, 60, 7, 24, 60, 7},    // Microgreens
+        {9, 6, 0, 0, 36, 36, 3, 0, 36, 3},        // Pea Shoots
+        {10, 13, 7, 12, 12, 24, 15, 12, 7, 36},   // Strawberry
+    };
+    struct Totals { int hard = 0, soft = 0, idle = 0; double revenue = 0, penalties = 0; } edfTotal, laTotal;
+    for (const Row& r : rows) {
+        const Crop& crop = farm.scenario.crops[r.crop];
+        const std::vector<Lot>& lots = farm.demand[r.crop].lots;
+        const CropSchedule edf = scheduleCrop(lots, r.slots, crop.cycleWeeks, farm.scenario.horizonWeeks, SchedAlgo::Edf);
+        const CropSchedule la = scheduleCrop(lots, r.slots, crop.cycleWeeks, farm.scenario.horizonWeeks, SchedAlgo::EdfLookahead);
+        CHECK(edf.hardTotal == r.hardTotal && la.hardTotal == r.hardTotal && edf.softTotal == r.softTotal && la.softTotal == r.softTotal);
+        CHECK(edf.hardOnTime == r.edfHard && edf.softServed == r.edfSoft && edf.idleSlotWeeks == r.edfIdle);
+        CHECK(la.hardOnTime == r.laHard && la.softServed == r.laSoft && la.idleSlotWeeks == r.laIdle);
+        checkValidSchedule(edf, crop.cycleWeeks, farm.scenario.horizonWeeks);
+        checkValidSchedule(la, crop.cycleWeeks, farm.scenario.horizonWeeks);
+        edfTotal.hard += edf.hardOnTime; edfTotal.soft += edf.softServed; edfTotal.idle += edf.idleSlotWeeks;
+        edfTotal.revenue += edf.revenue; edfTotal.penalties += edf.penalties;
+        laTotal.hard += la.hardOnTime; laTotal.soft += la.softServed; laTotal.idle += la.idleSlotWeeks;
+        laTotal.revenue += la.revenue; laTotal.penalties += la.penalties;
+    }
+    CHECK(edfTotal.hard == 67 && edfTotal.soft == 246 && edfTotal.idle == 102);
+    CHECK_NEAR(edfTotal.revenue, 690360, 1e-6);
+    CHECK_NEAR(edfTotal.penalties, 39210, 1e-6);
+    CHECK_NEAR(edfTotal.revenue - edfTotal.penalties, 651150, 1e-6);
+    CHECK(laTotal.hard == 84 && laTotal.soft == 223 && laTotal.idle == 140);
+    CHECK_NEAR(laTotal.revenue, 678480, 1e-6);
+    CHECK_NEAR(laTotal.penalties, 0, 1e-6);
+    CHECK_NEAR(laTotal.revenue - laTotal.penalties, 678480, 1e-6);
+
+    // The depth of the lookahead on the same input: hard lots on time out of 84. Plain EDF 67; L = 0 67; L = 1 69; L = the
+    // cycle (the default) 84; unlimited 84.
+    auto hardOnTime = [&](SchedAlgo algo, int lookahead) {
+        int total = 0;
+        for (const Row& r : rows)
+            total += scheduleCrop(farm.demand[r.crop].lots, r.slots, farm.scenario.crops[r.crop].cycleWeeks, farm.scenario.horizonWeeks, algo, lookahead).hardOnTime;
+        return total;
+    };
+    CHECK(hardOnTime(SchedAlgo::Edf, -1) == 67);
+    CHECK(hardOnTime(SchedAlgo::EdfLookahead, 0) == 67);
+    CHECK(hardOnTime(SchedAlgo::EdfLookahead, 1) == 69);
+    CHECK(hardOnTime(SchedAlgo::EdfLookahead, -1) == 84);
+    CHECK(hardOnTime(SchedAlgo::EdfLookahead, 1000000) == 84);
+    CHECK(hardOnTime(SchedAlgo::EdfLookahead, 2147483647) == 84);   // no overflow at the largest window
+
+    // A crop with lots but no slots shows its contract as missed: Lettuce without slots misses all 24 hard lots at 1080 each.
+    const CropSchedule abandoned = scheduleCrop(farm.demand[0].lots, 0, farm.scenario.crops[0].cycleWeeks, farm.scenario.horizonWeeks, SchedAlgo::EdfLookahead);
+    CHECK(abandoned.hardOnTime == 0 && abandoned.hardTotal == 24 && abandoned.softServed == 0);
+    CHECK_NEAR(abandoned.penalties, 24 * 1080, 1e-6);
 }

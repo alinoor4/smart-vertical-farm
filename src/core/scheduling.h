@@ -1,6 +1,8 @@
 #pragma once
-// Component 5 (plan section 11): delivery lots, slot arithmetic and, from milestone M6, the schedulers.
-// The crop-selection knapsack needs the first two parts: how many slots a crop's contracts need.
+// Component 5 (plan section 11): delivery lots, slot arithmetic and the schedulers (earliest deadline first, the same with
+// lookahead, and an exact search for small cases). The crop-selection knapsack needs the first two parts: how many
+// slots a crop's contracts need.
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -47,3 +49,36 @@ struct CropDemand {
 // element 0 being delivery week 1; it must reach week horizon-1+cycle. The scenario must have passed validateScenario.
 // Time O(T + J + Jh^2 log k) for J lots, Jh of them hard, and k contract slots: the slot search dominates.
 CropDemand buildCropDemand(const Scenario& scenario, int cropId, const std::vector<double>& spotForecast);
+
+// ---- the schedulers (plan 11.4 to 11.7): one crop at a time, its slots identical machines, its lots jobs of length p ----
+
+enum class SchedAlgo { Edf, EdfLookahead, Exact };
+
+// One batch: lot lotId is planted on slot `slot` in week `start` and harvested in week `end` = start + p.
+struct Batch { int cropId = 0, slot = 0, lotId = 0, start = 0, end = 0; };
+
+struct CropSchedule {
+    int cropId = 0, slots = 0;
+    std::vector<Lot> lots;
+    std::vector<char> scheduled;                 // parallel to lots: 1 when the lot gets a batch
+    std::vector<Batch> batches;
+    int hardTotal = 0, hardOnTime = 0, softTotal = 0, softServed = 0, idleSlotWeeks = 0;
+    double revenue = 0, penalties = 0;           // the value of the scheduled lots, and the penalty of the missed hard lots
+    std::string note;                            // e.g. why the exact search showed the lookahead schedule instead
+};
+
+// The most lots the exact search accepts, and the nodes it may visit, before it shows the lookahead schedule instead.
+constexpr int kExactMaxLots = 22;
+constexpr long long kExactNodeLimit = 2000000;
+
+// Schedules the lots of one crop on `slots` slots, all free from week 0, with plants in weeks 0 .. horizon-1.
+//  Edf: each week, each free slot takes the first released lot in the order (due week, hard first, value, id).
+//  EdfLookahead: the same, but a soft lot is taken only if starting it does not make a hard lot due within the next
+//    lookaheadWeeks weeks unreachable; -1 means the crop's cycle, 0 means no lookahead.
+//  Exact: the schedule of greatest value minus missed penalties, by depth-first search; for at most kExactMaxLots lots
+//    and exactNodeLimit nodes, otherwise the lookahead schedule with a note saying so.
+// A crop with lots but no slots gets a schedule too, with every hard lot missed. Throws std::invalid_argument for negative
+// slots or horizon, a cycle below 1 or a lookahead below -1. cropId is taken from the first lot (0 without lots).
+// Time: EDF O(J log J + T k J); lookahead adds O(T k Hw log k) for Hw hard lots in the window; exact O((k + 1)^J).
+CropSchedule scheduleCrop(const std::vector<Lot>& lots, int slots, int cycle, int horizon, SchedAlgo algo,
+                          int lookaheadWeeks = -1, long long exactNodeLimit = kExactNodeLimit);
