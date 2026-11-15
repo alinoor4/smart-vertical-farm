@@ -4,6 +4,10 @@
 #include <string>
 #include <vector>
 
+// The one tolerance (plan section 5.1): "need fits" is need <= have + EPS, and "a is better than b" is
+// a > b + EPS (a < b - EPS when lower is better), so rounding noise never changes a decision.
+constexpr double EPS = 1e-9;
+
 enum class Light { Low = 0, Medium = 1, High = 2 };
 
 struct Crop {

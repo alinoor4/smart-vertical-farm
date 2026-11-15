@@ -33,7 +33,8 @@ function(farm_static target)
   endif()
 endfunction()
 
-add_library(farm_core STATIC src/core/version.cpp src/core/json_io.cpp src/core/generator.cpp src/core/constraints.cpp)
+add_library(farm_core STATIC src/core/version.cpp src/core/json_io.cpp src/core/generator.cpp src/core/constraints.cpp
+  src/core/forecast.cpp)
 target_include_directories(farm_core PUBLIC src/core)
 target_link_libraries(farm_core PRIVATE nlohmann_json::nlohmann_json)   # only json_io.cpp may use it
 farm_warnings(farm_core)
@@ -43,7 +44,7 @@ target_link_libraries(farm_cli PRIVATE farm_core)
 farm_warnings(farm_cli)
 farm_static(farm_cli)
 
-add_executable(farm_tests tests/test_main.cpp tests/test_io.cpp tests/test_constraints.cpp)
+add_executable(farm_tests tests/test_main.cpp tests/test_io.cpp tests/test_constraints.cpp tests/test_forecast.cpp)
 target_link_libraries(farm_tests PRIVATE farm_core)
 farm_warnings(farm_tests)
 farm_static(farm_tests)
