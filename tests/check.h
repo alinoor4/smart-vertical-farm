@@ -2,6 +2,7 @@
 // Minimal test harness: TEST(name) registers a test, CHECK / CHECK_NEAR record failures.
 #include <cmath>
 #include <cstdio>
+#include <exception>
 #include <vector>
 
 struct TestCase { const char* name; void (*run)(); };
@@ -16,6 +17,13 @@ struct TestRegistrar { TestRegistrar(const char* name, void (*run)()) { allTests
 
 #define CHECK(cond) \
     do { if (!(cond)) { std::printf("%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #cond); ++failureCount(); } } while (0)
+
+#define CHECK_THROWS(expr) \
+    do { \
+        bool threw_ = false; \
+        try { expr; } catch (const std::exception&) { threw_ = true; } \
+        if (!threw_) { std::printf("%s:%d: CHECK_THROWS failed: %s did not throw\n", __FILE__, __LINE__, #expr); ++failureCount(); } \
+    } while (0)
 
 #define CHECK_NEAR(a, b, eps) \
     do { \
