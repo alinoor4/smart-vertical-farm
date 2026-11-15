@@ -2,6 +2,7 @@
 // from hand calculation where a comment says so, and from plan/reference_model.py.
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -511,4 +512,28 @@ TEST(knapsack_value_helper_and_empty_problem) {
     const KnapsackResult bb = solveBranchAndBound(empty);
     CHECK(bb.value == 0 && bb.provenOptimal && bb.upperBound == 0 && bb.count.empty());
     CHECK(solveDp(empty, unitOne).value == 0);
+    // A group with no copies is harmless (the builder never makes one, but a hand-made problem may).
+    const KnapsackProblem hole = makeProblem({5}, {makeGroup(0, {}, {1}), makeGroup(1, {2}, {1})});
+    CHECK(solveGreedy(hole).count == Counts({0, 1}) && solveBranchAndBound(hole).count == Counts({0, 1}));
+    CHECK(solveDp(hole, unitOne).count == Counts({0, 1}) && solveDp(hole, unitOne).value == 2);
+}
+
+// A NaN budget makes every comparison false, so greedy and branch and bound would take every copy and the DP table would
+// have no size; an unlimited budget has no DP grid. Both are refused instead of guessed at. An unlimited budget is fine
+// for greedy and branch and bound, and a resource that is switched off may hold anything.
+TEST(knapsack_refuses_nan_and_infinite_capacity) {
+    const double nan = std::numeric_limits<double>::quiet_NaN(), inf = std::numeric_limits<double>::infinity();
+    const std::vector<KnapsackGroup> groups = {makeGroup(0, {5, 4, 3}, {1, 1})};   // one tray uses 1 of each of two resources
+    const KnapsackProblem notANumber = makeProblem({nan, 5}, groups);
+    CHECK_THROWS(solveGreedy(notANumber));
+    CHECK_THROWS(solveBranchAndBound(notANumber));
+    CHECK_THROWS(solveDp(notANumber, unitOne));
+    const KnapsackProblem unlimited = makeProblem({inf, 2}, groups);
+    CHECK(solveGreedy(unlimited).count[0] == 2 && solveBranchAndBound(unlimited).count[0] == 2);
+    CHECK_THROWS(solveDp(unlimited, unitOne));
+    for (const double odd : {nan, inf}) {
+        KnapsackProblem off = makeProblem({odd, 5}, groups);
+        off.active[0] = false;
+        CHECK(solveGreedy(off).count[0] == 3 && solveBranchAndBound(off).count[0] == 3 && solveDp(off, unitOne).count[0] == 3);
+    }
 }

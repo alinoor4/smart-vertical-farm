@@ -19,7 +19,7 @@ struct KnapsackGroup {
 
 struct KnapsackProblem {
     std::vector<KnapsackGroup> groups;         // crops with at least one positive value, in crop-id order
-    std::array<double, kResources> capacity{};
+    std::array<double, kResources> capacity{};   // not NaN for an active resource (the solvers throw); the DP also needs it finite
     std::array<bool, kResources> active{{true, true, true, true, true}};   // an inactive resource is ignored entirely
 };
 

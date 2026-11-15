@@ -45,4 +45,5 @@ struct CropDemand {
 
 // Contract weeks, lots, contract slots, demand and penalty for crop cropId. spotForecast is the crop's forecast with
 // element 0 being delivery week 1; it must reach week horizon-1+cycle. The scenario must have passed validateScenario.
+// Time O(T + J + Jh^2 log k) for J lots, Jh of them hard, and k contract slots: the slot search dominates.
 CropDemand buildCropDemand(const Scenario& scenario, int cropId, const std::vector<double>& spotForecast);

@@ -41,6 +41,13 @@ double density(double value, const Weights& w, const Weights& capacity, const st
     return used > 0 ? value / used : kInfinity;
 }
 
+// Every comparison with NaN is false, so a NaN budget would let "does it fit" say yes to every copy (and make the sort
+// orders inconsistent). The builder cannot produce one, because validateScenario rejects it; a hand-made problem can.
+void refuseNaNCapacity(const KnapsackProblem& problem) {
+    for (int r : activeResources(problem))
+        if (std::isnan(problem.capacity[r])) throw std::invalid_argument("a knapsack capacity must be a number");
+}
+
 bool fits(const Weights& w, const Weights& remaining, const std::vector<int>& active) {
     for (int r : active)
         if (w[r] > remaining[r] + EPS) return false;
@@ -236,6 +243,7 @@ KnapsackProblem buildKnapsackProblem(const Scenario& scenario, const std::vector
 
 KnapsackResult solveGreedy(const KnapsackProblem& problem) {
     const auto start = Clock::now();
+    refuseNaNCapacity(problem);
     const std::vector<int> active = activeResources(problem), budgeted = budgetedResources(problem);
 
     struct Copy { double density, value; int cropId, group, k; };
@@ -264,6 +272,7 @@ KnapsackResult solveGreedy(const KnapsackProblem& problem) {
 }
 
 KnapsackResult solveBranchAndBound(const KnapsackProblem& problem, long long nodeLimit, double timeLimitSeconds) {
+    refuseNaNCapacity(problem);   // before the constructor, which sorts by densities
     BranchAndBound bb(problem, nodeLimit, timeLimitSeconds);
     const size_t n = problem.groups.size();
 
@@ -303,8 +312,11 @@ KnapsackResult solveDp(const KnapsackProblem& problem, const std::array<double, 
     const std::vector<int> res = activeResources(problem);   // one table dimension per active resource
     const int m = int(res.size());
     Weights unit = unitIn;
-    for (int r : res)
+    for (int r : res) {
         if (!(unit[r] > 0)) throw std::invalid_argument("solveDp needs a positive unit for every active resource");
+        // An unlimited budget has no grid (the search for the grid size below would never end); NaN fails this too.
+        if (!std::isfinite(problem.capacity[r])) throw std::invalid_argument("solveDp needs a finite capacity for every active resource");
+    }
 
     // Steps per resource at the requested units. Kept as doubles until the grid is known to be small.
     std::vector<double> steps(m);
