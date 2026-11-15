@@ -48,6 +48,9 @@ KnapsackProblem buildKnapsackProblem(const Scenario& scenario, const std::vector
 // The value of taking the first count[g] copies of every group g.
 double knapsackValue(const KnapsackProblem& problem, const std::vector<int>& count);
 
+// The tray values of every crop by crop id, as packing and refilling need them (an empty list for a crop without a group).
+std::vector<std::vector<double>> valuesByCrop(const KnapsackProblem& problem, std::size_t cropCount);
+
 // Variant 1 (plan 9.5): copies by value per used budget, taken while they fit. No guarantee of optimality.
 // Time O(N log N + N m) for N copies and m resources.
 KnapsackResult solveGreedy(const KnapsackProblem& problem);

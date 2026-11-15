@@ -193,6 +193,13 @@ double knapsackValue(const KnapsackProblem& problem, const std::vector<int>& cou
     return total;
 }
 
+std::vector<std::vector<double>> valuesByCrop(const KnapsackProblem& problem, std::size_t cropCount) {
+    std::vector<std::vector<double>> values(cropCount);
+    for (const KnapsackGroup& group : problem.groups)
+        if (group.cropId >= 0 && static_cast<std::size_t>(group.cropId) < cropCount) values[group.cropId] = group.values;
+    return values;
+}
+
 KnapsackProblem buildKnapsackProblem(const Scenario& scenario, const std::vector<CropDemand>& demand,
                                      const ConstraintModel& constraints, const std::array<bool, kResources>& active) {
     if (demand.size() != scenario.crops.size() || constraints.maxTraysByArea.size() != scenario.crops.size())

@@ -8,9 +8,7 @@
 #include <vector>
 
 #include "check.h"
-#include "constraints.h"
-#include "forecast.h"
-#include "generator.h"
+#include "farm.h"
 #include "knapsack.h"
 #include "rng.h"
 #include "scheduling.h"
@@ -64,42 +62,6 @@ double bruteForce(const KnapsackProblem& p) {
         ++count[g];
     }
     return best;
-}
-
-// The flat farm of plan Appendix A, G6, with everything the knapsack is built from.
-struct Farm {
-    Scenario scenario;
-    ConstraintModel constraints;
-    std::vector<CropDemand> demand;
-    KnapsackProblem problem;
-};
-
-Farm makeFarm(Scenario scenario, const std::array<bool, kResources>& active = {{true, true, true, true, true}}) {
-    Farm farm;
-    farm.scenario = std::move(scenario);
-    farm.constraints = buildConstraints(farm.scenario);
-    int longest = 0;
-    for (const Crop& c : farm.scenario.crops) longest = std::max(longest, c.cycleWeeks);
-    const int horizon = farm.scenario.horizonWeeks - 1 + longest;
-    for (const Crop& c : farm.scenario.crops) {
-        const ForecastResult f = forecastSeries(farm.scenario.orderHistory[c.id], farm.scenario.seasonLength, horizon);
-        farm.demand.push_back(buildCropDemand(farm.scenario, c.id, f.forecast));
-    }
-    farm.problem = buildKnapsackProblem(farm.scenario, farm.demand, farm.constraints, active);
-    return farm;
-}
-
-Scenario flatScenario() {
-    GeneratorParams params;
-    params.flat = true;
-    return generateScenario(params);
-}
-
-// Trays per crop id (0 for crops without a group).
-Counts byCrop(const KnapsackProblem& p, const KnapsackResult& r, size_t crops) {
-    Counts out(crops, 0);
-    for (size_t g = 0; g < p.groups.size(); ++g) out[p.groups[g].cropId] = r.count[g];
-    return out;
 }
 
 // A random problem small enough to enumerate: 1 to 3 resources, weights 0 to 4, capacities 4 to 9.
@@ -502,6 +464,17 @@ TEST(knapsack_dp_grid_rules) {
     const KnapsackResult all = solveDp(none, unitOne);
     CHECK(all.count == Counts({2, 1}) && all.value == 6 && all.provenOptimal && all.states == 1);
     CHECK(solveBranchAndBound(none).value == 6 && solveGreedy(none).value == 6);
+}
+
+// valuesByCrop: the values land at the crop id of their group; crops without a group get an empty list, and a group for a
+// crop beyond the count is ignored.
+TEST(knapsack_values_by_crop) {
+    const KnapsackProblem p = makeProblem({10}, {makeGroup(1, {5, 3}, {1}), makeGroup(4, {2}, {1}), makeGroup(7, {9}, {1})});
+    const std::vector<std::vector<double>> v = valuesByCrop(p, 5);
+    CHECK(v.size() == 5 && v[0].empty() && v[2].empty() && v[3].empty());
+    CHECK(v[1] == std::vector<double>({5, 3}) && v[4] == std::vector<double>({2}));
+    CHECK(valuesByCrop(p, 4)[1] == std::vector<double>({5, 3}) && valuesByCrop(p, 4).size() == 4);   // crop 4 is beyond the count
+    CHECK(valuesByCrop(makeProblem({10}, {}), 3).size() == 3 && valuesByCrop(makeProblem({10}, {}), 0).empty());
 }
 
 TEST(knapsack_value_helper_and_empty_problem) {
