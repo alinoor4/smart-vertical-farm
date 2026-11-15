@@ -23,8 +23,8 @@ struct ForecastResult {
 // A forced method that cannot be fitted to the whole history (only Holt-Winters, which needs 2 * seasonLength
 // weeks) falls back to Auto: the caller sees chosen != method and reports it.
 // Needs a non-empty history of finite values, seasonLength >= 1 and horizon >= 0, else throws std::invalid_argument.
-// Time O(n + horizon) per method; Holt-Winters tries a fixed grid of 80 settings, so its constant is 80, and every
-// method runs twice (hold-out, then refit).
+// Time O(n + horizon) per method run; Holt-Winters tries a fixed grid of 80 settings, so its constant is 80. All four
+// methods run once on the training part, then the chosen one runs again on the whole history.
 ForecastResult forecastSeries(const std::vector<double>& history, int seasonLength, int horizon,
                               ForecastMethod method = ForecastMethod::Auto);
 

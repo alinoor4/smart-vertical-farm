@@ -398,11 +398,15 @@ TEST(forecast_flat_scenario) {
     for (const Crop& c : s.crops) longestCycle = std::max(longestCycle, c.cycleWeeks);
     const int horizon = s.horizonWeeks - 1 + longestCycle;
     CHECK(horizon == 23);
-    for (size_t c = 0; c < s.crops.size(); ++c) {
+    // The "Base demand" column of plan section 6.1, kg per week, in crop order. (G6's "Demand" column is larger
+    // for crops with a contract, because the knapsack adds the contract kilograms to the spot forecast.)
+    const double baseDemand[12] = {9.0, 6.0, 4.8, 4.0, 2.4, 2.7, 2.0, 2.4, 1.5, 1.35, 7.0, 3.5};
+    CHECK(s.crops.size() == 12);
+    for (size_t c = 0; c < s.crops.size() && c < 12; ++c) {
         const ForecastResult r = forecastSeries(s.orderHistory[c], s.seasonLength, horizon);
         CHECK(r.chosen == ForecastMethod::SeasonalNaive);
         CHECK(int(r.forecast.size()) == horizon);
-        for (double v : r.forecast) CHECK(v == s.orderHistory[c][0]);
+        for (double v : r.forecast) CHECK_NEAR(v, baseDemand[c], 1e-12);
     }
 }
 
