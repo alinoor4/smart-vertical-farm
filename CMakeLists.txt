@@ -92,7 +92,7 @@ if(FARM_BUILD_APP)
     target_link_libraries(imgui_all PUBLIC imm32)
   endif()
 
-  add_executable(farm_app src/app/main.cpp)
+  add_executable(farm_app src/app/main.cpp src/app/ui.cpp src/app/ui_tabs.cpp src/app/ui_views.cpp)
   target_link_libraries(farm_app PRIVATE farm_core imgui_all)
   target_include_directories(farm_app SYSTEM PRIVATE ${stb_SOURCE_DIR})
   farm_warnings(farm_app)
