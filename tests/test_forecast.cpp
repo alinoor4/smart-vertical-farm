@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -387,6 +388,50 @@ TEST(forecast_rejects_bad_arguments) {
     CHECK_INVALID(forecastSeries({1, 2, 3}, 4, -1));
 #undef CHECK_INVALID
     CHECK(forecastSeries({1, 2, 3}, 1, 0).forecast.empty());   // a season of one week and no horizon are fine
+}
+
+// forecastWith is one method of forecastSeries on its own (the benchmarks time it): on the training part it gives the hold-out
+// prediction that forecastSeries reports, on the whole history the forced forecast and its parameters.
+TEST(forecast_one_method_on_its_own) {
+    Rng rng(7);
+    for (int trial = 0; trial < 20; ++trial) {
+        const int n = 8 + rng.below(40);
+        const Series y = randomSeries(rng, n, 4);
+        const ForecastResult whole = forecastSeries(y, 4, 3);
+        const Series training(y.begin(), y.end() - whole.holdoutLength);
+        for (ForecastMethod m : allMethods) {
+            const MethodForecast part = forecastWith(m, training, 4, whole.holdoutLength);
+            CHECK(part.ok == errorsOf(whole, m).available);
+            CHECK_VALUES(part.values, predictionOf(whole, m), 0);
+            const ForecastResult forced = forecastSeries(y, 4, 3, m);
+            const MethodForecast full = forecastWith(m, y, 4, 3);
+            if (forced.chosen == m) {   // a forced Holt-Winters that cannot be fitted falls back, and the run is then not ok
+                CHECK(full.ok);
+                CHECK_VALUES(full.values, forced.forecast, 0);
+                CHECK(full.parameters == forced.parameters);
+            } else {
+                CHECK(!full.ok);
+            }
+        }
+    }
+    CHECK(!forecastWith(ForecastMethod::HoltWinters, Series(7, 1.0), 4, 2).ok);   // one season and a bit is not enough
+    CHECK(forecastWith(ForecastMethod::SeasonalNaive, {5, 6}, 4, 0).values.empty());
+    // the arguments forecastSeries refuses, and Auto, which is not a method: std::invalid_argument and nothing else (a negative
+    // horizon would otherwise still end in a std::length_error from the vector)
+    auto invalid = [](const std::function<void()>& call) {
+        try {
+            call();
+        } catch (const std::invalid_argument&) {
+            return true;
+        } catch (...) {
+        }
+        return false;
+    };
+    CHECK(invalid([] { forecastWith(ForecastMethod::Auto, g2Series, 4, 3); }));
+    CHECK(invalid([] { forecastWith(ForecastMethod::Ses, {}, 4, 3); }));
+    CHECK(invalid([] { forecastWith(ForecastMethod::Ses, g2Series, 0, 3); }));
+    CHECK(invalid([] { forecastWith(ForecastMethod::Ses, g2Series, 4, -1); }));
+    CHECK(!invalid([] { forecastWith(ForecastMethod::Ses, g2Series, 4, 0); }));
 }
 
 // G6: on the flat scenario every history is constant, seasonal naive wins every tie and every forecast is the base demand.

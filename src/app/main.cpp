@@ -85,33 +85,46 @@ static void renderFrame(GLFWwindow* window, AppState& state, bool light) {
 // ---- screenshot mode (plan 14.5) ----------------------------------------------------------------------------------------
 
 struct Shot {
-    const char* name;
+    std::string name;
     int tab;
     bool sidebar, convergenceOnly;
+    int benchSuite;   // the benchmark suite to show alone (an index into AppState::bench), or -1
 };
-// The figures with the sidebar hidden are the ones the report uses. The benchmark figures (fig_bench_<suite>) come with the benchmarks, in M9.
-static const Shot kShots[] = {
-    {"ui_overview", TabOverview, true, false},        {"ui_layout", TabLayout, true, false},   {"ui_schedule", TabSchedule, true, false},
-    {"ui_forecast", TabForecast, true, false},        {"ui_constraints", TabConstraints, true, false}, {"ui_compare", TabCompare, true, false},
-    {"ui_data", TabData, true, false},                {"fig_layout", TabLayout, false, false}, {"fig_schedule", TabSchedule, false, false},
-    {"fig_forecast", TabForecast, false, false},      {"fig_constraints", TabConstraints, false, false}, {"fig_compare", TabCompare, false, false},
-    {"fig_convergence", TabCompare, false, true}};
+
+// The figures with the sidebar hidden are the ones the report uses: the benchmark figures (fig_bench_<suite>) come last, one for
+// each suite with a table.
+static std::vector<Shot> shotList(const AppState& state) {
+    std::vector<Shot> shots = {
+        {"ui_overview", TabOverview, true, false, -1},        {"ui_layout", TabLayout, true, false, -1},   {"ui_schedule", TabSchedule, true, false, -1},
+        {"ui_forecast", TabForecast, true, false, -1},        {"ui_constraints", TabConstraints, true, false, -1}, {"ui_compare", TabCompare, true, false, -1},
+        {"ui_data", TabData, true, false, -1},                {"fig_layout", TabLayout, false, false, -1}, {"fig_schedule", TabSchedule, false, false, -1},
+        {"fig_forecast", TabForecast, false, false, -1},      {"fig_constraints", TabConstraints, false, false, -1}, {"fig_compare", TabCompare, false, false, -1},
+        {"fig_convergence", TabCompare, false, true, -1}};
+    for (size_t i = 0; i < state.bench.size(); ++i) shots.push_back({"fig_bench_" + state.bench[i].suite, TabCompare, false, false, int(i)});
+    return shots;
+}
 
 static int runScreenshots(GLFWwindow* window, AppState& state, bool light, const std::string& dir) {
     runSync(state);   // the plan, the comparison and the packer table, all before the first shot
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
     int failed = 0;
-    for (const Shot& shot : kShots) {
+    if (state.bench.size() < benchSuiteNames().size()) {   // a missing table is a missing figure
+        fail("Only " + std::to_string(state.bench.size()) + " of " + std::to_string(benchSuiteNames().size()) + " benchmark tables were found. " + state.benchStatus, false);
+        ++failed;
+    }
+    for (const Shot& shot : shotList(state)) {
         state.requestTab = shot.tab;
         state.showSidebar = shot.sidebar;
         state.convergenceOnly = shot.convergenceOnly;
+        state.scalingOnly = shot.benchSuite >= 0;
+        if (shot.benchSuite >= 0) state.benchSuite = shot.benchSuite;
         glfwPollEvents();
         for (int i = 0; i < 4; ++i) {   // four frames let layouts and plot axes settle
             renderFrame(window, state, light);
             if (i < 3) glfwSwapBuffers(window);
         }
-        const std::filesystem::path file = std::filesystem::path(dir) / (std::string(shot.name) + ".png");
+        const std::filesystem::path file = std::filesystem::path(dir) / (shot.name + ".png");
         if (!saveScreenshot(window, file)) {
             fail("Could not write " + file.string(), false);
             ++failed;

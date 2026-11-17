@@ -28,6 +28,17 @@ struct ForecastResult {
 ForecastResult forecastSeries(const std::vector<double>& history, int seasonLength, int horizon,
                               ForecastMethod method = ForecastMethod::Auto);
 
+// One method on its own, as forecastSeries runs it on the training part: its forecast for the `horizon` weeks after y (clipped
+// at zero) and the parameters it chose. ok is false when the method cannot be fitted to y (Holt-Winters needs two seasons).
+// method must not be Auto, y must not be empty, seasonLength >= 1 and horizon >= 0, else throws std::invalid_argument. The
+// benchmarks time each method with it. Time O(n + horizon), and O(80 (n + horizon)) for Holt-Winters.
+struct MethodForecast {
+    bool ok = false;
+    std::vector<double> values;
+    std::string parameters;
+};
+MethodForecast forecastWith(ForecastMethod method, const std::vector<double>& y, int seasonLength, int horizon);
+
 // One parameter setting of simple exponential smoothing: the level after the last week and the one-step
 // in-sample squared error. The grid search in forecastSeries tries alpha = 0.1 .. 0.9. y must not be empty.
 struct SesFit { double level = 0, sse = 0; };

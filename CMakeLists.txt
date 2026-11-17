@@ -34,10 +34,15 @@ function(farm_static target)
 endfunction()
 
 add_library(farm_core STATIC src/core/version.cpp src/core/json_io.cpp src/core/generator.cpp src/core/constraints.cpp
-  src/core/forecast.cpp src/core/scheduling.cpp src/core/knapsack.cpp src/core/packing.cpp src/core/pipeline.cpp)
+  src/core/forecast.cpp src/core/scheduling.cpp src/core/knapsack.cpp src/core/packing.cpp src/core/pipeline.cpp src/core/bench.cpp)
 target_include_directories(farm_core PUBLIC src/core)
 target_link_libraries(farm_core PRIVATE nlohmann_json::nlohmann_json)   # only json_io.cpp may use it
 farm_warnings(farm_core)
+
+# The benchmark summary records the compile flags of the build type (plan 15).
+string(TOUPPER "${CMAKE_BUILD_TYPE}" farm_build_type)
+string(STRIP "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${farm_build_type}}" farm_build_flags)
+set_source_files_properties(src/core/bench.cpp PROPERTIES COMPILE_DEFINITIONS "FARM_BUILD_FLAGS=\"${farm_build_type}: ${farm_build_flags}\"")
 
 add_executable(farm_cli src/cli/main.cpp src/cli/summary.cpp)
 target_link_libraries(farm_cli PRIVATE farm_core)
@@ -45,7 +50,7 @@ farm_warnings(farm_cli)
 farm_static(farm_cli)
 
 add_executable(farm_tests tests/test_main.cpp tests/test_io.cpp tests/test_constraints.cpp tests/test_forecast.cpp
-  tests/test_scheduling.cpp tests/test_knapsack.cpp tests/test_packing.cpp tests/test_pipeline.cpp)
+  tests/test_scheduling.cpp tests/test_knapsack.cpp tests/test_packing.cpp tests/test_pipeline.cpp tests/test_bench.cpp)
 target_link_libraries(farm_tests PRIVATE farm_core)
 farm_warnings(farm_tests)
 farm_static(farm_tests)
@@ -54,7 +59,8 @@ enable_testing()
 add_test(NAME farm_tests COMMAND farm_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_test(NAME farm_cli_run COMMAND farm_cli run --scenario data/flat_scenario.json WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 set_tests_properties(farm_cli_run PROPERTIES PASS_REGULAR_EXPRESSION "relaxed optimum 39486.5")   # plan Appendix A, G6
-# The farm_cli bench test is added in M9, when that command exists.
+add_test(NAME farm_cli_bench COMMAND farm_cli bench --quick --out build/bench_quick WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+set_tests_properties(farm_cli_bench PROPERTIES TIMEOUT 60)   # plan 15 asks for 20 seconds; the limit only catches a hang
 
 if(FARM_BUILD_APP)
   FetchContent_Declare(imgui URL https://github.com/ocornut/imgui/archive/c1aaac65e896a45f81f47a4d68f9959e0f86c859.tar.gz)

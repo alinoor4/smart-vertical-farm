@@ -110,6 +110,32 @@ static std::string findDataDir(const std::string& exeDir) {
     return "";
 }
 
+// The first of ./bench/results, <exe>/bench/results and <exe>/../bench/results that holds the CSV file of some benchmark suite.
+static std::string findBenchDir(const std::string& exeDir) {
+    const fs::path candidates[] = {fs::path("bench") / "results", fs::path(exeDir) / "bench" / "results", fs::path(exeDir) / ".." / "bench" / "results"};
+    for (const fs::path& dir : candidates)
+        for (const std::string& suite : benchSuiteNames()) {
+            std::error_code ec;
+            if (fs::exists(dir / (suite + ".csv"), ec)) return fs::absolute(dir, ec).lexically_normal().string();
+        }
+    return "";
+}
+
+// Reads the benchmark tables for the Scaling part of the Compare tab. Missing or unreadable tables are not an error for the rest of
+// the app: the part says why it has nothing to show.
+static void loadBench(AppState& s, const std::string& exeDir) {
+    s.bench.clear();
+    s.benchDir = findBenchDir(exeDir);
+    s.benchStatus = "No benchmark tables found. Run: farm_cli bench (it writes them to bench/results).";
+    if (s.benchDir.empty()) return;
+    try {
+        s.bench = loadBenchResults(s.benchDir);
+    } catch (const std::exception& e) {
+        s.bench.clear();
+        s.benchStatus = std::string("Cannot read the benchmark tables: ") + e.what();
+    }
+}
+
 static void refreshFiles(AppState& s) {
     s.files.clear();
     std::error_code ec;
@@ -153,6 +179,7 @@ static bool loadFile(AppState& s, const std::string& path) {
 bool initState(AppState& s, const std::string& exeDir, const std::string& scenarioFile) {
     s.options = startingOptions();
     s.dataDir = findDataDir(exeDir);
+    loadBench(s, exeDir);
     refreshFiles(s);
     if (!scenarioFile.empty() && loadFile(s, scenarioFile)) return true;
     const std::string failure = s.status;

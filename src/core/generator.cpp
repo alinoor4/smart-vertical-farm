@@ -138,7 +138,8 @@ Scenario generateScenario(const GeneratorParams& p) {
             const double g = -0.05 + 0.20 * rng.unit();
             const double a = 0.05 + 0.30 * rng.unit();
             const double phi = 52 * rng.unit();
-            const double sigma = 0.05 + 0.10 * rng.unit();
+            const double drawn = 0.05 + 0.10 * rng.unit();   // drawn even when overridden, so the rest of the random stream does not move
+            const double sigma = p.noiseOverride >= 0 ? p.noiseOverride : drawn;
             for (int t = 0; t < n; ++t) {
                 double sum = 0;
                 for (int k = 0; k < 12; ++k) sum += rng.unit();

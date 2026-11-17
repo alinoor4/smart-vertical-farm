@@ -203,11 +203,99 @@ int decimalsOf(const CompareStage& stage, size_t column) {
     return 0;
 }
 
+// The Scaling part (plan 14.4): for one benchmark suite, the time of every algorithm against the size of its instances on log-log
+// axes, the measured exponent in the legend, beside the quality of its answers. A suite whose instances all have one size is drawn
+// against its parameter instead, on a linear axis. Both charts show the medians over the seeds that farm_cli bench wrote.
+void drawScaling(AppState& s, bool figure) {
+    if (s.bench.empty()) {
+        ImGui::TextDisabled("%s", s.benchStatus.c_str());
+        return;
+    }
+    s.benchSuite = std::clamp(s.benchSuite, 0, int(s.bench.size()) - 1);
+    const BenchSuiteView& view = s.bench[size_t(s.benchSuite)];
+    const BenchSuiteInfo& info = benchSuiteInfo(view.suite);
+    bool labelled = false;   // the parameter is in the labels only when a suite has both several sizes and several parameter values
+    for (const BenchSeries& series : view.series) labelled = labelled || series.label != series.algo;
+    const std::string description = info.what + format(" n counts %s.", info.nName.c_str()) + (labelled ? format(" The number after an algorithm's name is %s.", info.paramName.c_str()) : "");
+    if (figure) {
+        ImGui::TextUnformatted(view.suite.c_str());
+    } else {
+        ImGui::SetNextItemWidth(220.0f * s.scale);
+        if (ImGui::BeginCombo("Suite", view.suite.c_str())) {
+            for (int i = 0; i < int(s.bench.size()); ++i)
+                if (ImGui::Selectable(s.bench[size_t(i)].suite.c_str(), i == s.benchSuite)) s.benchSuite = i;
+            ImGui::EndCombo();
+        }
+    }
+    dimWrapped(description);
+
+    const float width = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2;
+    const float height = figure ? std::max(ImGui::GetContentRegionAvail().y, 300.0f * s.scale) : 320.0f * s.scale;
+    const std::string xName = view.xIsN ? info.nName : info.paramName;
+    const std::string qualityAxis = info.qualityName.substr(0, info.qualityName.find(" ("));   // the long explanations stay out of the axis
+
+    // The limits of the log axes are worked out here, because ImPlot's fit pads in data units, which on a log axis reaches below zero.
+    double xLow = 1e300, xHigh = 0, timeLow = 1e300, timeHigh = 0;
+    for (const BenchSeries& series : view.series)
+        for (const BenchPoint& p : series.points) {
+            const double x = view.xIsN ? p.n : p.param, time = std::max(p.timeMs, 1e-4);   // a log axis has no zero
+            xLow = std::min(xLow, x);
+            xHigh = std::max(xHigh, x);
+            timeLow = std::min(timeLow, time);
+            timeHigh = std::max(timeHigh, time);
+        }
+    if (view.series.empty()) return;
+    // A tick at every size (or parameter value) that was measured, so that the points can be read off the axis.
+    std::vector<double> ticks;
+    for (const BenchSeries& series : view.series)
+        for (const BenchPoint& p : series.points) ticks.push_back(view.xIsN ? p.n : p.param);
+    std::sort(ticks.begin(), ticks.end());
+    ticks.erase(std::unique(ticks.begin(), ticks.end()), ticks.end());
+    std::vector<std::string> tickText;
+    for (double tick : ticks) tickText.push_back(format("%.0f", tick));
+    std::vector<const char*> tickLabels;
+    for (const std::string& text : tickText) tickLabels.push_back(text.c_str());
+
+    for (int chart = 0; chart < 2; ++chart) {
+        const bool time = chart == 0;
+        if (!time) ImGui::SameLine();
+        // The suite is in the plot's id, so that each suite keeps its own axes.
+        const std::string title = format("%s against %s###%s_%s", time ? "Time" : "Quality", xName.c_str(), time ? "time" : "quality", view.suite.c_str());
+        if (!ImPlot::BeginPlot(title.c_str(), ImVec2(width, height))) continue;
+        ImPlot::SetupAxes(xName.c_str(), time ? "time in ms (median of the seeds)" : qualityAxis.c_str(), view.xIsN ? ImPlotAxisFlags_None : ImPlotAxisFlags_AutoFit,
+                          time ? ImPlotAxisFlags_None : ImPlotAxisFlags_AutoFit);
+        if (view.xIsN) {
+            ImPlot::SetupAxisScale(ImAxis_X1, ImPlotScale_Log10);
+            ImPlot::SetupAxisLimits(ImAxis_X1, xLow / 1.3, xHigh * 1.3, ImPlotCond_Once);
+        }
+        if (time) {
+            ImPlot::SetupAxisScale(ImAxis_Y1, ImPlotScale_Log10);
+            ImPlot::SetupAxisLimits(ImAxis_Y1, timeLow / 2, timeHigh * 2, ImPlotCond_Once);
+        }
+        ImPlot::SetupAxisTicks(ImAxis_X1, ticks.data(), int(ticks.size()), tickLabels.data());
+        ImPlot::SetupLegend(ImPlotLocation_East, ImPlotLegendFlags_Outside);   // outside, so that it never hides a point
+        for (size_t i = 0; i < view.series.size(); ++i) {
+            const BenchSeries& series = view.series[i];
+            std::vector<double> x, y;
+            for (const BenchPoint& p : series.points) {
+                x.push_back(view.xIsN ? p.n : p.param);
+                y.push_back(time ? std::max(p.timeMs, 1e-4) : p.quality);
+            }
+            const std::string label = time && series.hasExponent ? format("%s  n^%.2f", series.label.c_str(), series.exponent) : series.label;
+            // One colour per series, the same in both charts, whatever the legend text.
+            ImPlot::PlotLine(label.c_str(), x.data(), y.data(), int(x.size()),
+                             {ImPlotProp_LineColor, ImPlot::GetColormapColor(int(i)), ImPlotProp_Marker, ImPlotMarker_Circle, ImPlotProp_LineWeight, 2.0f});
+        }
+        ImPlot::EndPlot();
+    }
+}
+
 }  // namespace
 
 void drawCompare(AppState& s) {
     const bool chartOnly = !s.showSidebar && s.convergenceOnly;   // the figure of the genetic algorithm's progress
-    if (!chartOnly) {
+    const bool scalingOnly = !s.showSidebar && s.scalingOnly;     // the figure of one benchmark suite
+    if (!chartOnly && !scalingOnly) {
         if (s.showSidebar) {
             ImGui::BeginDisabled(s.comparing);
             if (ImGui::Button(s.comparing ? "Comparing..." : "Run comparison")) startCompare(s);
@@ -237,7 +325,13 @@ void drawCompare(AppState& s) {
             ImGui::EndTable();
         }
     }
-    if (!s.showSidebar && !s.convergenceOnly) return;
+    if (!s.showSidebar && !s.convergenceOnly && !s.scalingOnly) return;   // fig_compare: the tables alone
+
+    if (!chartOnly) {
+        if (!scalingOnly) ImGui::SeparatorText("Scaling: how the time and the quality of each algorithm grow with the size");
+        drawScaling(s, scalingOnly);
+    }
+    if (scalingOnly) return;
 
     // How the genetic packer improved, from the last run.
     ImGui::SeparatorText("Genetic algorithm: best layout by generation");

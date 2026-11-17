@@ -10,13 +10,6 @@
 
 namespace {
 
-// What one method produces for one series. ok is false when the method cannot be fitted to it.
-struct MethodRun {
-    bool ok = false;
-    std::vector<double> values;
-    std::string parameters;
-};
-
 std::string number(double v) {
     char text[32];
     std::snprintf(text, sizeof text, "%g", v);
@@ -31,8 +24,8 @@ double mean(const std::vector<double>& y, int from, int count) {
 }
 
 // Method 1. One season ago, repeated; with less than one season of history, the last value.
-MethodRun seasonalNaive(const std::vector<double>& y, int seasonLength, int horizon) {
-    MethodRun run;
+MethodForecast seasonalNaive(const std::vector<double>& y, int seasonLength, int horizon) {
+    MethodForecast run;
     run.ok = true;
     const int n = int(y.size());
     if (n < seasonLength) {
@@ -46,7 +39,7 @@ MethodRun seasonalNaive(const std::vector<double>& y, int seasonLength, int hori
 }
 
 // Method 2. The mean of the last k weeks, with k = 4, 8 or 12 chosen by the one-step error over the whole history.
-MethodRun movingAverage(const std::vector<double>& y, int horizon) {
+MethodForecast movingAverage(const std::vector<double>& y, int horizon) {
     const int n = int(y.size());
     int bestK = 0;                                    // 0: no candidate yet
     double bestSse = 0;
@@ -65,7 +58,7 @@ MethodRun movingAverage(const std::vector<double>& y, int horizon) {
     }
     if (bestK == 0) bestK = n;                        // shorter than every candidate: the mean of everything
 
-    MethodRun run;
+    MethodForecast run;
     run.ok = true;
     run.values.assign(horizon, mean(y, n - bestK, bestK));
     run.parameters = "k=" + std::to_string(bestK);
@@ -73,7 +66,7 @@ MethodRun movingAverage(const std::vector<double>& y, int horizon) {
 }
 
 // Method 3. The level after the last week, with alpha = 0.1 .. 0.9 chosen by the one-step error.
-MethodRun simpleSmoothing(const std::vector<double>& y, int horizon) {
+MethodForecast simpleSmoothing(const std::vector<double>& y, int horizon) {
     SesFit best;
     double bestAlpha = 0;                             // 0: no candidate yet
     for (int tenths = 1; tenths <= 9; ++tenths) {
@@ -81,7 +74,7 @@ MethodRun simpleSmoothing(const std::vector<double>& y, int horizon) {
         const SesFit fit = sesFit(y, alpha);
         if (bestAlpha == 0 || fit.sse < best.sse - EPS) { best = fit; bestAlpha = alpha; }
     }
-    MethodRun run;
+    MethodForecast run;
     run.ok = true;
     run.values.assign(horizon, best.level);
     run.parameters = "alpha=" + number(bestAlpha);
@@ -89,8 +82,8 @@ MethodRun simpleSmoothing(const std::vector<double>& y, int horizon) {
 }
 
 // Method 4. Needs two full seasons. Tries 5 x 4 x 4 = 80 parameter settings, alpha outermost, gamma innermost.
-MethodRun holtWinters(const std::vector<double>& y, int seasonLength, int horizon) {
-    MethodRun run;
+MethodForecast holtWinters(const std::vector<double>& y, int seasonLength, int horizon) {
+    MethodForecast run;
     if (static_cast<long long>(y.size()) < 2LL * seasonLength) return run;
     run.ok = true;
     double bestSse = 0;
@@ -110,8 +103,8 @@ MethodRun holtWinters(const std::vector<double>& y, int seasonLength, int horizo
 }
 
 // Runs one method (1..4 of ForecastMethod) and clips its forecast at zero: demand cannot be negative.
-MethodRun runMethod(ForecastMethod method, const std::vector<double>& y, int seasonLength, int horizon) {
-    MethodRun run;
+MethodForecast runMethod(ForecastMethod method, const std::vector<double>& y, int seasonLength, int horizon) {
+    MethodForecast run;
     switch (method) {
         case ForecastMethod::SeasonalNaive: run = seasonalNaive(y, seasonLength, horizon); break;
         case ForecastMethod::MovingAverage: run = movingAverage(y, horizon); break;
@@ -179,6 +172,12 @@ HoltWintersFit holtWintersFit(const std::vector<double>& y, int seasonLength, do
     return fit;
 }
 
+MethodForecast forecastWith(ForecastMethod method, const std::vector<double>& y, int seasonLength, int horizon) {
+    if (method == ForecastMethod::Auto || y.empty() || seasonLength < 1 || horizon < 0)
+        throw std::invalid_argument("forecastWith needs a method other than Auto, a non-empty history, seasonLength >= 1 and horizon >= 0");
+    return runMethod(method, y, seasonLength, horizon);
+}
+
 ForecastResult forecastSeries(const std::vector<double>& history, int seasonLength, int horizon, ForecastMethod method) {
     if (history.empty() || seasonLength < 1 || horizon < 0)
         throw std::invalid_argument("forecastSeries needs a non-empty history, seasonLength >= 1 and horizon >= 0");
@@ -194,7 +193,7 @@ ForecastResult forecastSeries(const std::vector<double>& history, int seasonLeng
         const std::vector<double> test(history.end() - result.holdoutLength, history.end());
         double bestMae = std::numeric_limits<double>::infinity();
         for (int m = 1; m <= 4; ++m) {                      // in the order of ForecastMethod; a later method must beat the pick
-            const MethodRun run = runMethod(ForecastMethod(m), train, seasonLength, result.holdoutLength);
+            const MethodForecast run = runMethod(ForecastMethod(m), train, seasonLength, result.holdoutLength);
             if (!run.ok) continue;
             result.holdoutPrediction[m - 1] = run.values;
             result.holdout[m - 1] = score(test, run.values);
@@ -204,7 +203,7 @@ ForecastResult forecastSeries(const std::vector<double>& history, int seasonLeng
 
     // Refit on the whole history: the forced method when it can be fitted, otherwise the best one.
     result.chosen = best;
-    MethodRun run;
+    MethodForecast run;
     if (method != ForecastMethod::Auto) {
         run = runMethod(method, history, seasonLength, horizon);
         if (run.ok) result.chosen = method;

@@ -10,6 +10,7 @@ struct GeneratorParams {
     double jitter = 0.0;     // relative jitter on numeric crop fields
     int historyWeeks = 156;
     int horizonWeeks = 12;
+    double noiseOverride = -1;   // relative noise sigma of the order histories: negative draws it per crop as usual (plan 6.4), otherwise this value for every crop
 };
 
 // Time O(crops * historyWeeks). Does not validate: the caller runs validateScenario on the result.

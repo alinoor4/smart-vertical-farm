@@ -1,11 +1,16 @@
 // farm_cli <command> [options]. Exit codes: 0 success, 1 failure while running, 2 bad arguments or invalid scenario.
+#include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "bench.h"
 #include "generator.h"
 #include "json_io.h"
 #include "pipeline.h"
@@ -23,6 +28,7 @@ const char* const usage =
     "  run --scenario FILE [--forecast auto|naive|ma|ses|hw] [--knapsack greedy|dp|bnb] [--packer ffd|bfd|ga]\n"
     "      [--scheduler edf|lookahead|exact] [--lookahead N] [--no-refill] [--ga-seed N] [--out FILE]\n"
     "  compare --scenario FILE [--out FILE]\n"
+    "  bench [--quick] [--suite NAME] [--out DIR] [--machine TEXT]\n"
     "exit codes: 0 success, 1 failure while running, 2 bad arguments or invalid scenario\n";
 
 // The value after args[i]; leaves i on it.
@@ -184,6 +190,48 @@ int compare(const std::vector<std::string>& args) {
     return 0;
 }
 
+// Runs the benchmark suites, writes one CSV per suite and summary.md (built from the CSV files in the folder, so --suite refreshes
+// one suite without losing the others). --machine is the CPU, core and memory text that the shell read from the operating system.
+int bench(const std::vector<std::string>& args) {
+    namespace fs = std::filesystem;
+    bool quick = false;
+    std::string suite, out = "bench/results", machine;
+    for (size_t i = 0; i < args.size(); ++i) {
+        const std::string& option = args[i];
+        if (option == "--quick") quick = true;
+        else if (option == "--suite") suite = textAfter(args, i);
+        else if (option == "--out") out = textAfter(args, i);
+        else if (option == "--machine") machine = textAfter(args, i);
+        else throw UsageError("unknown option " + option);
+    }
+    const std::vector<std::string>& names = benchSuiteNames();
+    if (!suite.empty() && std::find(names.begin(), names.end(), suite) == names.end()) {
+        std::string list;
+        for (const std::string& name : names) list += (list.empty() ? "" : "|") + name;
+        throw UsageError("unknown suite " + suite + " (use " + list + ")");
+    }
+
+    std::error_code ec;
+    fs::create_directories(out, ec);
+    const auto begin = std::chrono::steady_clock::now();
+    auto secondsSince = [](std::chrono::steady_clock::time_point t) { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count(); };
+    for (const std::string& name : names) {
+        if (!suite.empty() && suite != name) continue;
+        const auto start = std::chrono::steady_clock::now();
+        const std::vector<BenchRow> rows = runBenchSuite(name, quick);
+        saveBenchCsv(rows, (fs::path(out) / (name + ".csv")).string());
+        std::printf("%-13s %4zu rows %7.1f s\n", name.c_str(), rows.size(), secondsSince(start));
+        std::fflush(stdout);   // the long suites are slow: show progress as it comes
+    }
+    const std::string summaryPath = (fs::path(out) / "summary.md").string();
+    std::ofstream summary(summaryPath, std::ios::binary);
+    summary << benchSummary(loadBenchResults(out), machine);
+    summary.flush();
+    if (!summary) throw std::runtime_error("cannot write " + summaryPath);
+    std::printf("wrote the CSV files and %s in %.1f s\n", summaryPath.c_str(), secondsSince(begin));
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -195,6 +243,7 @@ int main(int argc, char** argv) {
         if (args[0] == "validate") return validate(rest);
         if (args[0] == "run") return run(rest);
         if (args[0] == "compare") return compare(rest);
+        if (args[0] == "bench") return bench(rest);
         throw UsageError("unknown command " + args[0]);
     } catch (const UsageError& e) {
         std::fprintf(stderr, "farm_cli: %s\nfarm_cli %s\n%s", e.what(), farmVersion(), usage);

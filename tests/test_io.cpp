@@ -98,6 +98,48 @@ TEST(generator_is_deterministic_and_seed_sensitive) {
     CHECK(generateScenario(p).orderHistory != generateScenario(q).orderHistory);
 }
 
+// noiseOverride (the forecast benchmark): a negative value is the usual per-crop draw, and any other value is drawn and then
+// ignored, so the random stream does not move. Two noise levels with one seed therefore differ only by the noise term:
+// y(noise) = trend and season + noise * base * z, with the same z in every week of every crop.
+TEST(noise_override_changes_only_the_noise) {
+    GeneratorParams usual;
+    usual.crops = 24;
+    GeneratorParams explicitNegative = usual;
+    explicitNegative.noiseOverride = -5;
+    expectSame(generateScenario(usual), generateScenario(explicitNegative));
+
+    GeneratorParams quiet = usual, loud = usual;
+    quiet.noiseOverride = 0.05;
+    loud.noiseOverride = 0.30;
+    GeneratorParams flat = usual;
+    flat.flat = true;
+    const Scenario a = generateScenario(quiet), b = generateScenario(loud), base = generateScenario(flat);
+    CHECK(a.orderHistory != b.orderHistory && a.orderHistory != generateScenario(usual).orderHistory);
+    // The drawn sigma is 0.05 to 0.15, so a noise of 0.10 is within 0.05 of it: against the usual scenario the histories differ by
+    // at most 6 * 0.05 * base. Had the override skipped the draw, the whole random stream would have moved and they would not.
+    GeneratorParams middle = usual;
+    middle.noiseOverride = 0.10;
+    const Scenario usualScenario = generateScenario(usual), middling = generateScenario(middle);
+    for (size_t c = 0; c < usualScenario.orderHistory.size(); ++c)
+        for (size_t t = 0; t < usualScenario.orderHistory[c].size(); ++t)
+            CHECK(std::fabs(middling.orderHistory[c][t] - usualScenario.orderHistory[c][t]) <= 6 * 0.05 * base.orderHistory[c][t] + 0.011);
+
+    GeneratorParams none = usual;
+    none.noiseOverride = 0;   // zero is a noise level, not "unset": no noise at all
+    const Scenario noiseless = generateScenario(none);
+    CHECK(noiseless.orderHistory != generateScenario(usual).orderHistory);
+    for (size_t c = 0; c < a.orderHistory.size(); ++c)   // and the noiseless histories differ from the noisy ones by at most the noise
+        for (size_t t = 0; t < a.orderHistory[c].size(); ++t)
+            CHECK(std::fabs(noiseless.orderHistory[c][t] - a.orderHistory[c][t]) <= 6 * 0.05 * base.orderHistory[c][t] + 0.011);
+    for (size_t c = 0; c < a.orderHistory.size(); ++c)
+        for (size_t t = 0; t < a.orderHistory[c].size(); ++t) {
+            // z is a sum of twelve uniforms minus 6, so it lies in [-6, 6]; two decimals of rounding and the clip at zero (which
+            // only shrinks a difference) add at most 0.01.
+            const double bound = 6 * (0.30 - 0.05) * base.orderHistory[c][t] + 0.011;
+            CHECK(std::fabs(a.orderHistory[c][t] - b.orderHistory[c][t]) <= bound);
+        }
+}
+
 TEST(flat_history_is_the_base_demand) {
     const Scenario s = generateScenario(flatParams());
     CHECK(std::count(s.orderHistory[0].begin(), s.orderHistory[0].end(), 9.0) == 156);      // Lettuce

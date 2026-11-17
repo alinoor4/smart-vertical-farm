@@ -6,6 +6,7 @@
 
 #include "imgui.h"
 
+#include "bench.h"
 #include "generator.h"
 #include "pipeline.h"
 
@@ -40,6 +41,12 @@ struct AppState {
     std::vector<PackerRow> packers;
     bool hasPackers = false;
 
+    // The benchmark tables farm_cli bench wrote (plan 15), for the Scaling part of the Compare tab.
+    std::vector<BenchSuiteView> bench;
+    std::string benchDir;                        // where they were read from; empty when none were found
+    std::string benchStatus;                     // why there are none, for the tab
+    int benchSuite = 0;                          // the suite on show
+
     // The workers (plan 14.2): each gets copies and returns a value, so nothing is shared and nothing is locked.
     std::future<PlanResult> pending;
     Scenario pendingScenario;
@@ -56,6 +63,7 @@ struct AppState {
     float scale = 1;
     bool showSidebar = true;                     // false: only the selected tab, for the figures of the report
     bool convergenceOnly = false;                // with the sidebar hidden: the convergence chart alone
+    bool scalingOnly = false;                    // with the sidebar hidden: the charts of one benchmark suite alone (fig_bench_<suite>)
     int tab = TabOverview;                       // the tab on show
     int requestTab = -1;                         // a tab to select on the next frame
     int forecastCrop = 0;
