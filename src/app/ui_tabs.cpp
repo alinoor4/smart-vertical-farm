@@ -38,6 +38,16 @@ void drawOverview(AppState& s) {
         statCell("Net over the plan", thousands(m.net, 0), format("PKR in %d weeks", s.planned.horizonWeeks));
         ImGui::EndTable();
     }
+    // Budget use of the final plan, one number per resource (plan 12.4), red where a budget is exceeded. A ninth tile would not fit the 1280 px window.
+    const char* const resource[kResources] = {"labour", "water", "nutrient", "energy", "area"};
+    ImGui::TextDisabled("Budget use");
+    for (int k = 0; k < kResources; ++k) {
+        const bool over = m.budgetUse[size_t(k)] > 1.0 + EPS;
+        if (over) ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(235, 90, 90, 255));
+        ImGui::SameLine(0, 16.0f * s.scale);
+        ImGui::Text("%s %.0f%%", resource[k], 100 * m.budgetUse[size_t(k)]);
+        if (over) ImGui::PopStyleColor();
+    }
     ImGui::Separator();
 
     // The selection table: what the plan holds of each crop.

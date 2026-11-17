@@ -25,13 +25,17 @@ std::string initials(const std::string& name) {
     return out;
 }
 
-// The longest of the name, its first four letters, its initials and its first letter that fits in the box; "" when none does.
-std::string fitLabel(const std::string& name, float width, float height) {
-    if (height < ImGui::GetTextLineHeight()) return "";
-    const std::string options[4] = {name, name.substr(0, 4), initials(name), name.substr(0, 1)};
+// The first of the options, longest first, whose text fits the width; "" when none does.
+std::string firstThatFits(const std::vector<std::string>& options, float width) {
     for (const std::string& option : options)
         if (ImGui::CalcTextSize(option.c_str()).x <= width) return option;
     return "";
+}
+
+// The longest of the name, its first four letters, its initials and its first letter that fits in the box; "" when none does.
+std::string fitLabel(const std::string& name, float width, float height) {
+    if (height < ImGui::GetTextLineHeight()) return "";
+    return firstThatFits({name, name.substr(0, 4), initials(name), name.substr(0, 1)}, width);
 }
 
 }  // namespace
@@ -119,8 +123,13 @@ void drawLayout(AppState& s) {
             }
             dl->AddRect(p0, p1, dimColour, 0.0f, 1.5f);
             const double percent = 100.0 * double(filled[size_t(id)]) / (double(sh.width) * sh.depth);
-            dl->AddText(ImVec2(x, p1.y + 2), textColour, format("%s   %.0f%% full", sh.name.c_str(), percent).c_str());
-            dl->AddText(ImVec2(x, p1.y + 2 + line), dimColour, format("%d cm | %s light | %.0f%% hum.", sh.clearance, lightName(sh.light), sh.humidity).c_str());
+            // Both caption lines are cut down until they fit under the rack, so none runs into the next rack or off the window.
+            const float rackPx = float(view.widest) * pxPerCm;
+            dl->AddText(ImVec2(x, p1.y + 2), textColour,
+                        firstThatFits({format("%s   %.0f%% full", sh.name.c_str(), percent), format("%s %.0f%%", sh.name.c_str(), percent), format("%.0f%%", percent)}, rackPx).c_str());
+            dl->AddText(ImVec2(x, p1.y + 2 + line), dimColour,
+                        firstThatFits({format("%d cm | %s light | %.0f%% hum.", sh.clearance, lightName(sh.light), sh.humidity),
+                                       format("%d cm | %s | %.0f%% hum.", sh.clearance, lightName(sh.light), sh.humidity), format("%d cm", sh.clearance)}, rackPx).c_str());
             y = p1.y + 2 * line + 10.0f * s.scale;
         }
         tallest = std::max(tallest, y - origin.y);
