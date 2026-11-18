@@ -102,7 +102,7 @@ src/cli/              farm_cli, the command-line tool
 src/app/              farm_app, the Dear ImGui desktop app
 tests/                farm_tests: a small hand-written CHECK harness, run by CTest
 bench/results/        the ten CSV files and summary.md written by `farm_cli bench`
-docs/                 complexity-analysis.md; screenshots/ (the two pictures above; `farm_app --screenshot` writes more)
+docs/                 complexity-analysis.md; screenshots/ (the PNG files that `farm_app --screenshot` writes)
 plan/                 the implementation plan, and reference_model.py
 ```
 
