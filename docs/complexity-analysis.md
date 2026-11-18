@@ -139,7 +139,7 @@ return colour
 
 **4 Space.** `O(C)` beyond the graph (the order, the colours, one `used` array of at most `Δ + 1` entries); `O(C + E)` with the graph.
 
-**5 Correctness.** A heuristic. The colouring is always proper: a vertex takes a colour that none of its already coloured neighbours has, and neighbours coloured later avoid its colour in turn. It uses at most `Δ + 1` colours: `v` has at most `deg(v)` coloured neighbours, so one of the colours `0 .. deg(v)` is free. It is not optimal: on the crown graph of Appendix A (G1), which is bipartite and so needs 2 colours, it uses 3. Welsh and Powell's paper proves a sharper bound [Welsh-Powell 1967].
+**5 Correctness.** A heuristic. The colouring is always proper: a vertex takes a colour that none of its already coloured neighbours has, and neighbours coloured later avoid its colour in turn. It uses at most `Δ + 1` colours: `v` has at most `deg(v)` coloured neighbours, so one of the colours `0 .. deg(v)` is free. It is not optimal: on the crown graph of Appendix A (G1), which is bipartite and so needs 2 colours, it uses 3. The method is from [Welsh-Powell 1967].
 
 **6 Measured.** `colouring` suite: 1.94 at 50% edge probability (2 points); none at 10% and 30%, where only the largest size (400 vertices, 0.07 ms and 0.15 ms) reaches 0.05 ms. At a fixed edge probability `q`, `E` is about `q·C²/2`, so the bound grows as `C²`; the one fit is consistent with that and too thin to say more.
 
@@ -248,7 +248,7 @@ ses(y, H):
 
 ### 4.2 Additive Holt-Winters with a grid search
 
-**1 Problem.** Forecast a series that has a trend and a seasonal pattern, choosing the three smoothing constants by exhaustive search over a grid: `α` in {0.1, 0.3, 0.5, 0.7, 0.9}, `β` in {0.01, 0.05, 0.1, 0.3}, `γ` in {0.05, 0.1, 0.3, 0.5}, which is 80 settings.
+**1 Problem.** Forecast a series that has a trend and a seasonal pattern (additive Holt-Winters, [Holt 2004; Winters 1960]), choosing the three smoothing constants by exhaustive search over a grid: `α` in {0.1, 0.3, 0.5, 0.7, 0.9}, `β` in {0.01, 0.05, 0.1, 0.3}, `γ` in {0.05, 0.1, 0.3, 0.5}, which is 80 settings.
 
 **2 Pseudo-code.**
 
@@ -634,7 +634,7 @@ How each was checked is given in brackets. "Record" means the bibliographic reco
 - D. Bertsimas and R. Demir, *An approximate dynamic programming approach to multidimensional knapsack problems*, Management Science 48(4), 2002, pp. 550-565. [Record; statement: the multidimensional knapsack problem is NP-hard in the strong sense (read in the paper's own text as found by search).]
 - J. K. Lenstra, A. H. G. Rinnooy Kan and P. Brucker, *Complexity of machine scheduling problems*, Annals of Discrete Mathematics 1, 1977, pp. 343-362. [Record; its abstract says it establishes NP-completeness for many machine scheduling problems.]
 - *Elements of Scheduling*, lecture notes, arXiv:2001.06005, Theorem 3.11. [Statement: 1|r_j|L_max is strongly NP-hard.]
-- D. J. A. Welsh and M. B. Powell, *An upper bound for the chromatic number of a graph and its application to timetabling problems*, The Computer Journal 10(1), 1967, pp. 85-86. [Record only; I did not read the bound it proves.]
+- D. J. A. Welsh and M. B. Powell, *An upper bound for the chromatic number of a graph and its application to timetabling problems*, The Computer Journal 10(1), 1967, pp. 85-86. [Record only; the paper itself was not read.]
 - D. Brélaz, *New methods to color the vertices of a graph*, Communications of the ACM 22(4), 1979, pp. 251-256. [Record; statement: Theorem 1, DSATUR is exact on bipartite graphs.]
 - C. C. Holt, *Forecasting seasonals and trends by exponentially weighted moving averages*, International Journal of Forecasting 20(1), 2004, pp. 5-10 (first issued as a 1957 report of the Carnegie Institute of Technology). [Record.]
 - P. R. Winters, *Forecasting sales by exponentially weighted moving averages*, Management Science 6(3), 1960, pp. 324-342. [Record.]
