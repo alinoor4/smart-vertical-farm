@@ -110,6 +110,8 @@ plan/                 the implementation plan, and reference_model.py
 
 All algorithms listed above, and the random-number generator (SplitMix64 in `src/core/rng.h`, so that a seed gives the same result on every machine), are written in this project. The code in `src/core` uses only the C++ standard library. The third-party libraries below draw the window and the charts, read and write JSON and save PNG files; none of them contains an algorithm of this project.
 
+The product is C++ only. Python is used only as tooling: `plan/reference_model.py` checks the plan's golden numbers, and the generators of the report and the slides (kept in `docs/tools/` once those documents exist) are documentation tooling.
+
 ## Third-party code
 
 CMake downloads these at pinned versions into `.deps/` (nothing is copied into this repository), and links them into the executables. Each library's licence text is in its folder under `.deps/` after the first build.
@@ -122,9 +124,13 @@ CMake downloads these at pinned versions into `.deps/` (nothing is copied into t
 | [nlohmann/json](https://github.com/nlohmann/json) | 3.12.0 | reading and writing scenario and result files | MIT |
 | [stb_image_write](https://github.com/nothings/stb) | 1.16 | saving PNG screenshots | MIT or public domain, at your choice |
 
+## Licence
+
+This project is released under the [MIT licence](LICENSE). The libraries in the table above keep their own licences.
+
 ## Notes on this build
 
 - **Toolchain location.** The plan asked for the toolchain on drive D:. This computer has no D: drive, so the WinLibs package that winget installed under `%LOCALAPPDATA%\Microsoft\WinGet\Packages` on C: is used (the plan's first fallback: accept C: while it keeps 4 GB free).
 - **Certificates.** The CMake in the WinLibs package has no list of certificate authorities, so `build.ps1` passes `-DCMAKE_TLS_CAINFO` pointing at the bundle of Git for Windows.
 - **No other fallback was needed.** GLFW 3.5.1, Dear ImGui 1.93.0 and ImPlot 1.1 built as pinned, and the OpenGL context opened.
-- **What has been checked.** The tests and benchmarks ran on one Windows 11 computer with GCC 16.2.0. Every tab of the app was checked through its screenshot and its numbers against `farm_cli run`, and `--selftest` passes. Real mouse and keyboard use of the app, and display scaling above 100%, have not been tried by anyone yet.
+- **What has been checked.** The tests and benchmarks ran on one Windows 11 computer with GCC 16.2.0. Every tab of the app was checked through its screenshot and its numbers against `farm_cli run`, and `--selftest` passes. The project owner has also clicked through the app by hand and found nothing wrong. Display scaling above 100% has not been tried.

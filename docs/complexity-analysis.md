@@ -1,23 +1,6 @@
 # Complexity analysis
 
-This document analyses the algorithms in `src/core` **as they are built**. Every bound below was derived from the code, not copied from the plan; where the code differs from the plan's text, section 9 says so. Every measured number comes from `bench/results/summary.md` and the CSV files beside it (written by `farm_cli bench`; the machine, compiler and flags are recorded at the top of `summary.md`), or from the output of `farm_cli run --scenario data/default_scenario.json` and `farm_cli compare --scenario data/flat_scenario.json`; the text says which.
-
-Each algorithm gets the same seven parts: **1** the problem it solves, **2** pseudo-code, **3** time, **4** space, **5** correctness or optimality, **6** the measured exponent beside the theoretical one, **7** where it sits in the pipeline and what it is compared against.
-
-## Contents
-
-1. [Summary of the bounds](#1-summary-of-the-bounds)
-2. [Notation and how the measurements were made](#2-notation-and-how-the-measurements-were-made)
-3. [Constraints](#3-constraints) (graph construction, Welsh-Powell, DSATUR, exact colouring)
-4. [Forecasting](#4-forecasting) (the three simple methods, Holt-Winters, the selection rule)
-5. [Crop selection](#5-crop-selection) (greedy, dynamic programming, branch and bound)
-6. [Packing](#6-packing) (First-Fit and Best-Fit Decreasing, genetic algorithm)
-7. [Scheduling](#7-scheduling) (slot arithmetic and interval depth, EDF, lookahead, exact)
-8. [Hardness](#8-hardness)
-9. [Where this document differs from the plan's text](#9-where-this-document-differs-from-the-plans-text)
-10. [References](#10-references)
-
----
+The bounds of every algorithm in `src/core`, as built, with the measured growth beside them. Sections 3 to 7 derive each row; section 9 lists where the code differs from the plan's text.
 
 ## 1. Summary of the bounds
 
@@ -64,6 +47,23 @@ The measured growth, beside the predicted one. "Points" is the number of sizes w
 ---
 
 ## 2. Notation and how the measurements were made
+
+This document analyses the algorithms in `src/core` **as they are built**. Every bound below was derived from the code, not copied from the plan; where the code differs from the plan's text, section 9 says so. Every measured number comes from `bench/results/summary.md` and the CSV files beside it (written by `farm_cli bench`; the machine, compiler and flags are recorded at the top of `summary.md`), or from the output of `farm_cli run --scenario data/default_scenario.json` and `farm_cli compare --scenario data/flat_scenario.json`; the text says which.
+
+Each algorithm gets the same seven parts: **1** the problem it solves, **2** pseudo-code, **3** time, **4** space, **5** correctness or optimality, **6** the measured exponent beside the theoretical one, **7** where it sits in the pipeline and what it is compared against.
+
+**Contents.**
+
+1. [Summary of the bounds](#1-summary-of-the-bounds)
+2. [Notation and how the measurements were made](#2-notation-and-how-the-measurements-were-made)
+3. [Constraints](#3-constraints) (graph construction, Welsh-Powell, DSATUR, exact colouring)
+4. [Forecasting](#4-forecasting) (the three simple methods, Holt-Winters, the selection rule)
+5. [Crop selection](#5-crop-selection) (greedy, dynamic programming, branch and bound)
+6. [Packing](#6-packing) (First-Fit and Best-Fit Decreasing, genetic algorithm)
+7. [Scheduling](#7-scheduling) (slot arithmetic and interval depth, EDF, lookahead, exact)
+8. [Hardness](#8-hardness)
+9. [Where this document differs from the plan's text](#9-where-this-document-differs-from-the-plans-text)
+10. [References](#10-references)
 
 | Symbol | Meaning |
 |---|---|
@@ -128,10 +128,14 @@ adjacency[a] = every b with conflict[a][b] != None, ascending
 
 ```text
 order = vertices sorted by (degree descending, index ascending)
-colour[v] = -1 for every vertex
+colour[v] = -1 for every vertex                          # -1: not coloured yet
 for v in order:
-    used = { colour[u] : u in adj[v], colour[u] >= 0 }
-    colour[v] = the smallest integer not in used
+    used = empty set
+    for u in adj[v]:                                     # the colours the neighbours already have
+        if colour[u] >= 0: add colour[u] to used
+    c = 0
+    while c in used: c += 1                              # the smallest colour no neighbour uses
+    colour[v] = c
 return colour
 ```
 
@@ -154,11 +158,15 @@ return colour
 ```text
 colour[v] = -1 for every vertex
 repeat C times:
-    for each uncoloured v:
-        saturation[v] = number of distinct colours among v's coloured neighbours
-    pick the uncoloured v with the largest saturation
-        (ties: larger degree, then smaller index)
-    colour[v] = the smallest colour that no coloured neighbour of v uses
+    best = none
+    for each uncoloured vertex v, in index order:
+        saturation = number of distinct colours among v's coloured neighbours
+        if best is none or saturation > saturation(best)
+           or (saturation == saturation(best) and degree(v) > degree(best)):
+            best = v                       # on a full tie the lower index stays
+    c = 0
+    while a coloured neighbour of best has colour c: c += 1      # the smallest free colour
+    colour[best] = c
 return colour
 ```
 
@@ -297,12 +305,16 @@ Code: `src/core/knapsack.cpp`. The model (plan section 9): decide how many trays
 **2 Pseudo-code.**
 
 ```text
-for each copy (g, k):  density = value / sum over budgeted resources r of (weight[g][r] / budget[r])
-sort copies by (density descending, value descending, crop id, k)
-remaining = budget;  count[g] = 0 for every group
-for copy in sorted order:
-    if copy.k == count[g] + 1 and weight[g][r] <= remaining[r] + 1e-9 for every r:
-        remaining -= weight[g];  count[g] += 1
+for each copy (g, k):
+    density = value / sum over budgeted resources r of (weight[g][r] / budget[r])    # infinity if the sum is 0
+sort the copies by (density descending, value descending, crop id, k)
+remaining = budget;  count[g] = 0 for every group g
+for copy (g, k) in sorted order:
+    if k != count[g] + 1: continue                       # only a crop's next tray
+    if weight[g][r] > remaining[r] + 1e-9 for some r: continue          # does not fit
+    remaining -= weight[g]
+    count[g] += 1
+return count
 ```
 
 **3 Time.** Computing the densities is `O(N·m)`, the sort `O(N log N)`, the scan `O(N·m)`: `O(N log N + N·m)`.
@@ -510,12 +522,14 @@ minSlotsForHardLots(lots, p):  for m = 0, 1, 2, ...: if hardMissed(m slots free 
 ```text
 pending = lots sorted by (dueWeek, hard before soft, value descending, id)
 freeAt[k] = 0 for every slot k
-for t = 0 .. T-1:
+for t = 0 .. T-1:                                                       # planting weeks
     for k = 0 .. slots-1:
         if freeAt[k] > t: continue                                      # the slot is busy
-        pick = first lot in pending that is unscheduled with release <= t <= latestStart
+        pick = first lot in pending that is unscheduled
+               and has release <= t <= latestStart
         if there is none: continue                                      # the slot is idle this week
-        schedule pick on slot k from t to t + p;  freeAt[k] = t + p
+        schedule pick on slot k from t to t + p
+        freeAt[k] = t + p
 ```
 
 **3 Time.** Sorting is `O(J log J)`. There are `T·k` (week, slot) pairs, and the search for the first eligible lot walks `pending`, `O(J)` in the worst case: `O(J log J + T·k·J)`.
@@ -600,7 +614,7 @@ The bound is valid because every lot's `gain` is at least 0, so no completion of
 
 Known results, stated as sources give them. Section 10 says how far each was checked.
 
-- **Knapsack.** The 0/1 knapsack problem is NP-hard [Karp 1972] but only in the weak sense: the table DP of 5.2 with one budget costs `O(N·W)`, pseudo-polynomial. With several budgets (the *multidimensional* knapsack) the problem is NP-hard in the strong sense when the number of budgets is part of the input, so no algorithm polynomial in the budgets' values is expected [Bertsimas-Demir 2002, citing earlier work]. For a **fixed** number `m` of budgets the table DP is pseudo-polynomial, `O(N·Π (W_r + 1))`, but the table is a product over the budgets and grows exponentially with `m`: measured 25 times per added budget in 5.2. The problem solved here contains the multidimensional knapsack (a group with one copy is an ordinary item), so it is at least as hard.
+- **Knapsack.** The 0/1 knapsack problem is NP-hard [Karp 1972] but only in the weak sense: the table DP of 5.2 with one budget costs `O(N·W)`, pseudo-polynomial. With several budgets (the *multidimensional* knapsack) the problem is NP-hard in the strong sense when the number of budgets is part of the input, so no algorithm polynomial in the budgets' values is expected [Bertsimas-Demir 2002, citing earlier work]. The standard text on this problem is [Kellerer et al. 2004, chapter 9]. For a **fixed** number `m` of budgets the table DP is pseudo-polynomial, `O(N·Π (W_r + 1))`, but the table is a product over the budgets and grows exponentially with `m`: measured 25 times per added budget in 5.2. The problem solved here contains the multidimensional knapsack (a group with one copy is an ordinary item), so it is at least as hard.
 - **Packing.** Bin packing is NP-hard in the strong sense [Garey-Johnson 1979]. The packing problem here contains it: if every tray has the depth of a shelf, each shelf holds exactly one row, and placing trays is one-dimensional bin packing along the width, with the shelves as bins. It also contains graph colouring: with trays so small that capacity never binds, finding the fewest shelves in use under the conflicts is colouring the conflict graph. So no polynomial algorithm is expected to pack optimally, and FFD, BFD and the genetic algorithm are heuristics.
 - **Colouring.** The chromatic number is NP-hard [Karp 1972], which is why Welsh-Powell and DSATUR are heuristics and the exact search is exponential and limited to small graphs.
 - **Scheduling.** Single-machine non-preemptive scheduling with release times and deadlines (equivalently, minimising maximum lateness with release times) is NP-hard in the strong sense (the lecture notes *Elements of Scheduling*, Theorem 3.11; the classification of machine scheduling problems is in [Lenstra et al. 1977]). The lots of one crop here are a special case, with equal lengths `p` and windows of one width `f`; **I do not claim that this special case is NP-hard**, and nothing in this document depends on it. The exact search is exponential because it is a plain search, and it is limited to 22 lots for that reason.
@@ -638,6 +652,7 @@ How each was checked is given in brackets. "Record" means the bibliographic reco
 - D. Brélaz, *New methods to color the vertices of a graph*, Communications of the ACM 22(4), 1979, pp. 251-256. [Record; statement: Theorem 1, DSATUR is exact on bipartite graphs.]
 - C. C. Holt, *Forecasting seasonals and trends by exponentially weighted moving averages*, International Journal of Forecasting 20(1), 2004, pp. 5-10 (first issued as a 1957 report of the Carnegie Institute of Technology). [Record.]
 - P. R. Winters, *Forecasting sales by exponentially weighted moving averages*, Management Science 6(3), 1960, pp. 324-342. [Record.]
+- H. Kellerer, U. Pferschy and D. Pisinger, *Knapsack Problems*, Springer, 2004, chapter 9 (multidimensional knapsack problems; relaxations, and exact algorithms including branch and bound and dynamic programming). [Record and chapter list from the publisher's listing; the text itself was not read.]
 - J. Kleinberg and E. Tardos, *Algorithm Design*, Addison-Wesley, 2005, chapter 4 (4.1 interval scheduling and partitioning, 4.2 scheduling to minimise lateness by an exchange argument). [Record; section content from lecture material built on the book (secondary).]
 - T. H. Cormen, C. E. Leiserson, R. L. Rivest and C. Stein, *Introduction to Algorithms* (the course text), the greedy-algorithms chapter, for the fractional knapsack problem [CLRS]. [Not looked up: cited from the course text by topic only.]
 - E. G. Coffman Jr., M. R. Garey, D. S. Johnson and R. E. Tarjan, *Performance bounds for level-oriented two-dimensional packing algorithms*, SIAM Journal on Computing 9(4), 1980, pp. 808-826. [Record.]
