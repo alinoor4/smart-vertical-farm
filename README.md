@@ -65,6 +65,8 @@ exit codes: 0 success, 1 failure while running, 2 bad arguments or invalid scena
 
 The desktop app has a sidebar (scenario, weekly budgets, horizon, the algorithm of each stage, an Optimize button) and seven tabs: Overview, Layout, Schedule, Forecast, Constraints, Compare (which also draws the benchmark curves) and Data. It looks for `data\` (and `bench\results\`, for the benchmark curves) in the current folder, beside the executable, or one level above it. Two more modes exist for checking it without a person: `farm_app --screenshot <folder>` writes a PNG of every tab, and `farm_app --selftest` runs a scripted session and exits with 0 on success.
 
+**Package.** `.\package.ps1` builds, copies `farm_app.exe`, `farm_cli.exe`, `LICENSE`, `data\` and `bench\results\` into `dist\SmartVerticalFarm\`, adds a short `README.txt` and `THIRD_PARTY_NOTICES.txt` (the licence texts of the libraries inside the programs, copied from `.deps\`), starts both programs once with a `PATH` that holds only the Windows folders, and zips the folder. `dist\` is ignored by git.
+
 **Other platforms.** The Windows-specific parts are `build.ps1`, a few `#ifdef _WIN32` lines in the app (the executable's folder and an error message box) and the MinGW options in `CMakeLists.txt`. On Linux or macOS the same `CMakeLists.txt` should work with GCC or Clang and the system's OpenGL and GLFW dependencies, but this has not been tried. To build only the core, the command line and the tests, which need no OpenGL, run `cmake -S . -B build -G Ninja -DFARM_BUILD_APP=OFF` and `cmake --build build`. (With the WinLibs package on Windows, add `-DCMAKE_TLS_CAINFO=<path of the ca-bundle.crt of Git for Windows>` to the first command, as `build.ps1` does; see the notes at the end.)
 
 ## Tests
@@ -104,6 +106,7 @@ The title page names the team, and this repository is public, so the names are n
 ```text
 CMakeLists.txt        build definition; dependencies are fetched by CMake into .deps/
 build.ps1             one-command build and test on Windows
+package.ps1           builds dist\SmartVerticalFarm\ and its zip (programs, data, benchmark results, licences)
 data/                 default_scenario.json (the sample farm), flat_scenario.json (flat demand: the golden test's input)
 src/core/             the algorithms and the data model: the C++ standard library only, except json_io.cpp
                       (the only file that includes nlohmann/json)
