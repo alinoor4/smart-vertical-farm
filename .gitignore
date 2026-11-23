@@ -3,6 +3,7 @@ Smart Vertical Farm Proposal.pdf
 docs/report/*.docx
 docs/report/*.pdf
 docs/slides/*.pptx
+docs/tools/*.local.json
 
 # Build output and local tooling
 build/
